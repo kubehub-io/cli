@@ -1,0 +1,31 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: kube-scheduler
+  namespace: kube-system
+spec:
+  hostNetwork: true
+  containers:
+    - name: kube-scheduler
+      image: {{.Image}}
+      command:
+        - kube-scheduler
+      args:
+        - --kubeconfig={{.KubeconfigPath}}
+        - --leader-elect=false
+      volumeMounts:
+        - name: pki
+          mountPath: /etc/kubernetes/pki
+          readOnly: true
+        - name: kubeconfig
+          mountPath: {{.KubeconfigPath}}
+          readOnly: true
+  volumes:
+    - name: pki
+      hostPath:
+        path: /etc/kubernetes/pki
+        type: Directory
+    - name: kubeconfig
+      hostPath:
+        path: {{.KubeconfigPath}}
+        type: File

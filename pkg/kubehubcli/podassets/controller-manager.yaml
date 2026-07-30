@@ -1,0 +1,39 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: kube-controller-manager
+  namespace: kube-system
+spec:
+  hostNetwork: true
+  containers:
+    - name: kube-controller-manager
+      image: {{.Image}}
+      command:
+        - kube-controller-manager
+      args:
+        - --kubeconfig={{.KubeconfigPath}}
+        - --authentication-kubeconfig={{.KubeconfigPath}}
+        - --authorization-kubeconfig={{.KubeconfigPath}}
+        - --root-ca-file={{.RootCAFile}}
+        - --use-service-account-credentials=true
+        - --allocate-node-cidrs=true
+        - --cluster-cidr={{.cluster.network.podCIDR}}
+        - --service-cluster-ip-range={{.cluster.network.serviceCIDR}}
+        - --controllers=*,bootstrapsigner,tokencleaner,-certificatesigningrequest-approving-controller,-certificatesigningrequest-cleaner-controller,-certificatesigningrequest-signing-controller
+        - --leader-elect=false
+      volumeMounts:
+        - name: pki
+          mountPath: /etc/kubernetes/pki
+          readOnly: true
+        - name: kubeconfig
+          mountPath: {{.KubeconfigPath}}
+          readOnly: true
+  volumes:
+    - name: pki
+      hostPath:
+        path: /etc/kubernetes/pki
+        type: Directory
+    - name: kubeconfig
+      hostPath:
+        path: {{.KubeconfigPath}}
+        type: File
