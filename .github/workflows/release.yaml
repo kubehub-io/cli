@@ -1,0 +1,24 @@
+on:
+  release:
+    types: [published]
+
+jobs:
+  build:
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4 # v6
+        with:
+          fetch-depth: 0
+      - name: Setup Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+        with:
+          go-version: '1.26'
+      - name: Run GoReleaser
+        uses: https://github.com/goreleaser/goreleaser-action@5daf1e915a5f0af01ddbcd89a43b8061ff4f1a89 # v7
+        with:
+          distribution: goreleaser
+          version: '~> v2'
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
