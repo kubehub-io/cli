@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"golang.org/x/oauth2"
@@ -352,7 +353,15 @@ func (t *loggingRoundTripper) RoundTrip(req *http.Request) (*http.Response, erro
 	if t.verbose {
 		slog.Info(fmt.Sprintf(">>> %s %s", req.Method, req.URL.String()))
 		for k, v := range req.Header {
-			if k == "Authorization" {
+			kl := strings.ToLower(k)
+			isSensitive := kl == "authorization" ||
+				kl == "proxy-authorization" ||
+				kl == "cookie" ||
+				kl == "set-cookie" ||
+				kl == "x-api-key" ||
+				kl == "x-auth-token"
+			if isSensitive {
+				slog.Info(fmt.Sprintf(">>> %s: [REDACTED]", k))
 				continue
 			}
 			for _, h := range v {
