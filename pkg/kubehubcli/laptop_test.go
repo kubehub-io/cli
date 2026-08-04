@@ -37,3 +37,4 @@ func TestConfigureLogind(t *testing.T) {
 		require.True(t, found, "no line containing %s= found", s.key)
 	}
 }
+
