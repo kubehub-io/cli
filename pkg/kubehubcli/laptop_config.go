@@ -3,6 +3,9 @@ package kubehubcli
 import (
 	"fmt"
 	"log/slog"
+	"strings"
+
+	"github.com/jaypipes/ghw"
 )
 
 var logindSettings = []struct {
@@ -12,6 +15,28 @@ var logindSettings = []struct {
 	{"HandleLidSwitch", "ignore"},
 	{"HandleLidSwitchExternalPower", "ignore"},
 	{"HandleLidSwitchDocked", "ignore"},
+}
+
+func isLaptop() bool {
+	if chassis, err := ghw.Chassis(); err == nil && chassis != nil {
+		typeDesc := strings.ToLower(strings.TrimSpace(chassis.TypeDescription))
+		switch {
+		case strings.Contains(typeDesc, "laptop"), strings.Contains(typeDesc, "notebook"),
+			strings.Contains(typeDesc, "portable"), strings.Contains(typeDesc, "sub notebook"):
+			return true
+		case strings.Contains(typeDesc, "rack mount"), strings.Contains(typeDesc, "server"):
+			return false
+		}
+
+		switch strings.TrimSpace(chassis.Type) {
+		case "8", "9", "10", "14":
+			return true
+		case "23":
+			return false
+		}
+	}
+
+	return false
 }
 
 func applyLogindSettings(path string) error {
