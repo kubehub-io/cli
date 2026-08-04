@@ -50,7 +50,7 @@ func RunPreflightChecks(ctx context.Context, client *v202607.Client, authHeader 
 	}
 
 	if clusterInfo != nil {
-		if err := checkCIDRConflict(ctx, client, authHeader, opts, clusterInfo, result); err != nil {
+		if err := checkCIDRConflict(ctx, client, authHeader, opts, clusterInfo, info, result); err != nil {
 			slog.Warn(fmt.Sprintf("  warning: CIDR conflict check: %v", err))
 		}
 	}
@@ -155,48 +155,22 @@ func checkStaticIP(iface string, info *HostInfo, osConfig OSConfigurator, result
 	return nil
 }
 
-func checkCIDRConflict(ctx context.Context, client *v202607.Client, authHeader v202607.RequestEditorFn, opts *JoinOptions, clusterInfo *v202607.Cluster, result *PreflightResult) error {
-	allCIDRs, err := DetectAllHostCIDRs()
-	if err != nil {
-		return fmt.Errorf("detect host CIDRs: %w", err)
-	}
-
-	virtualCIDRs, err := DetectVirtualHostCIDRs()
-	if err != nil {
-		virtualCIDRs = nil
-	}
-
+func checkCIDRConflict(ctx context.Context, client *v202607.Client, authHeader v202607.RequestEditorFn, opts *JoinOptions, clusterInfo *v202607.Cluster, info *HostInfo, result *PreflightResult) error {
 	podCIDR, svcCIDR, _ := resolveClusterCIDRs(clusterInfo)
 
-	podConflict := HostCIDRConflicts(allCIDRs, podCIDR)
-	svcConflict := HostCIDRConflicts(allCIDRs, svcCIDR)
+	hostNets := detectHostNetworks()
 
-	if !podConflict && !svcConflict {
+	allCIDRs := make([]*net.IPNet, 0, len(hostNets))
+	for _, n := range hostNets {
+		allCIDRs = append(allCIDRs, n.CIDR)
+	}
+
+	conflicts := describeCIDRConflicts(hostNets, podCIDR, svcCIDR)
+	if len(conflicts) == 0 {
 		return nil
 	}
 
-	var sourceDesc string
-	if podConflict && svcConflict {
-		sourceDesc = fmt.Sprintf("Pod CIDR (%s) and Service CIDR (%s)", podCIDR, svcCIDR)
-	} else if podConflict {
-		sourceDesc = fmt.Sprintf("Pod CIDR (%s)", podCIDR)
-	} else {
-		sourceDesc = fmt.Sprintf("Service CIDR (%s)", svcCIDR)
-	}
-
-	var conflictSource string
-	if len(virtualCIDRs) > 0 {
-		virtualIface := findConflictingVirtualInterface(virtualCIDRs, podCIDR, svcCIDR)
-		if virtualIface != "" {
-			conflictSource = fmt.Sprintf("virtual interface %s", virtualIface)
-		} else {
-			conflictSource = "host network"
-		}
-	} else {
-		conflictSource = "host network"
-	}
-
-	slog.Warn(fmt.Sprintf("  [!] %s conflicts with %s", sourceDesc, conflictSource))
+	slog.Warn(fmt.Sprintf("  [!] %s", strings.Join(conflicts, "; ")))
 
 	var nodes []v202607.Node
 	if opts != nil {
@@ -252,6 +226,25 @@ func checkCIDRConflict(ctx context.Context, client *v202607.Client, authHeader v
 
 	slog.Warn("      WARNING: Network conflict may cause connectivity issues for pods and services.")
 	return nil
+}
+
+func describeCIDRConflicts(hostNets []hostNetwork, podCIDR, svcCIDR string) []string {
+	sources := []struct {
+		label string
+		cidr  string
+	}{
+		{"Pod CIDR", podCIDR},
+		{"Service CIDR", svcCIDR},
+	}
+
+	var conflicts []string
+	for _, src := range sources {
+		if net := findConflictingNetwork(hostNets, src.cidr); net != nil {
+			conflicts = append(conflicts,
+				fmt.Sprintf("%s (%s) conflicts with %s", src.label, src.cidr, net.Describe()))
+		}
+	}
+	return conflicts
 }
 
 func findConflictingVirtualInterface(virtualCIDRs []*net.IPNet, podCIDR, svcCIDR string) string {
