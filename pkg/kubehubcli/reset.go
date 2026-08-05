@@ -151,7 +151,7 @@ func ResetNode(opts *ResetOptions) error {
 			return RunCmd("rm", "-f", "/etc/sysctl.d/98-kubernetes.conf")
 		}},
 		{"reload sysctl", func() error {
-			return RunCmd("sysctl", "--system")
+			return reloadSysctl()
 		}},
 		{"reload systemd", func() error {
 			return RunCmd("systemctl", "daemon-reload")
