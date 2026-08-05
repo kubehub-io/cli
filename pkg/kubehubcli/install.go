@@ -23,8 +23,41 @@ import (
 	v202607 "github.com/kubehub-io/kubehubcli/pkg/clientlib/v202607"
 )
 
+var currentEUID = os.Geteuid
+
+func sudoArgs(cmd ...string) []string {
+	if currentEUID() == 0 {
+		return cmd
+	}
+	return append([]string{"sudo"}, cmd...)
+}
+
+func snackOptions(opts ...snack.Option) []snack.Option {
+	if currentEUID() != 0 {
+		opts = append(opts, snack.WithSudo())
+	}
+	return opts
+}
+
+var execSysctl = func(args ...string) error {
+	return RunCmdCapture(args[0], args[1:]...)
+}
+
+// reloadSysctl applies sysctl settings. procps sysctl supports --system,
+// BusyBox (Alpine) only supports -p <file>.
+func reloadSysctl(files ...string) error {
+	if err := execSysctl("sysctl", "--system"); err == nil {
+		return nil
+	}
+	if len(files) == 0 {
+		return nil
+	}
+	args := append([]string{"sysctl", "-p"}, files...)
+	return execSysctl(args...)
+}
+
 func RunCmd(name string, args ...string) error {
-	cmd := exec.Command("sudo", append([]string{name}, args...)...)
+	cmd := exec.Command(sudoArgs(name)[0], append(sudoArgs(name)[1:], args...)...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
@@ -34,7 +67,7 @@ func RunCmd(name string, args ...string) error {
 }
 
 func RunCmdCapture(name string, args ...string) error {
-	cmd := exec.Command("sudo", append([]string{name}, args...)...)
+	cmd := exec.Command(sudoArgs(name)[0], append(sudoArgs(name)[1:], args...)...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%s: %w, output: %s", name, err, string(out))
@@ -43,7 +76,7 @@ func RunCmdCapture(name string, args ...string) error {
 }
 
 func writeFileAsRoot(path string, data []byte, perm os.FileMode) error {
-	cmd := exec.Command("sudo", "tee", path)
+	cmd := exec.Command(sudoArgs("tee")[0], append(sudoArgs("tee")[1:], path)...)
 	cmd.Stdin = bytes.NewReader(data)
 	cmd.Stdout = io.Discard
 	cmd.Stderr = os.Stderr
@@ -501,7 +534,7 @@ func applySysctl() error {
 		return err
 	}
 
-	if err := RunCmdCapture("sysctl", "--system"); err != nil {
+	if err := reloadSysctl("/etc/sysctl.d/98-kubernetes.conf"); err != nil {
 		return err
 	}
 
@@ -707,7 +740,7 @@ func installIscsiadm() error {
 		pkgName = "iscsi-initiator-utils"
 	}
 
-	if _, err := mgr.Install(context.Background(), snack.Targets(pkgName), snack.WithSudo(), snack.WithAssumeYes()); err != nil {
+	if _, err := mgr.Install(context.Background(), snack.Targets(pkgName), snackOptions(snack.WithAssumeYes())...); err != nil {
 		return fmt.Errorf("install %s: %w", pkgName, err)
 	}
 
@@ -739,7 +772,7 @@ func installRunc() error {
 				return nil
 			}
 			slog.Warn(fmt.Sprintf("runc %s is too old, removing and installing manually", version))
-			if _, err := mgr.Remove(context.Background(), snack.Targets("runc"), snack.WithSudo(), snack.WithAssumeYes()); err != nil {
+			if _, err := mgr.Remove(context.Background(), snack.Targets("runc"), snackOptions(snack.WithAssumeYes())...); err != nil {
 				slog.Warn(fmt.Sprintf("warning: remove old runc: %v", err))
 			}
 			return installRuncManual()
