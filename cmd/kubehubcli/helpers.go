@@ -40,6 +40,25 @@ func errorExit(format string, args ...any) {
 	os.Exit(1)
 }
 
+// errorExitAPI logs a structured error for a non-2xx API response, surfacing
+// the server-provided error code and message, then exits.
+func errorExitAPI(op string, resp *http.Response) {
+	apiErr := v202607.ParseError(resp)
+	if apiErr != nil {
+		attrs := []any{slog.Int("status", resp.StatusCode)}
+		if apiErr.Code != nil {
+			attrs = append(attrs, slog.String("code", *apiErr.Code))
+		}
+		msg := ""
+		if apiErr.Message != nil {
+			msg = *apiErr.Message
+		}
+		slog.Error(op, attrs...)
+		errorExit("%s: %s", op, msg)
+	}
+	errorExit("%s: status %d", op, resp.StatusCode)
+}
+
 func getMapFlag(cmd *cobra.Command, name string) map[string]string {
 	vals, _ := cmd.Flags().GetStringArray(name)
 	m := make(map[string]string, len(vals))

@@ -257,12 +257,7 @@ func nodeReconcileCmd(cfg *kubehubcli.Config) *cobra.Command {
 				nodeETag = *nodeInfo.Metadata.Etag
 			}
 
-			putResp, err := client.UpdateNode(ctx, cluster, node, nodeRequest, authHeader, func(ctx context.Context, req *http.Request) error {
-				if nodeETag != "" {
-					req.Header.Set("If-Match", nodeETag)
-				}
-				return nil
-			})
+			putResp, err := client.UpdateNode(ctx, cluster, node, nodeRequest, authHeader, v202607.WithIfMatch(nodeETag))
 			if err != nil {
 				errorExit("put node: %v", err)
 			}

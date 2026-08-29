@@ -134,12 +134,7 @@ func clusterReconcileCmd(cfg *kubehubcli.Config) *cobra.Command {
 				clusterETag = *clusterInfo.Metadata.Etag
 			}
 
-			putResp, err := client.UpdateCluster(ctx, cluster, clusterRequest, authHeader, func(ctx context.Context, req *http.Request) error {
-				if clusterETag != "" {
-					req.Header.Set("If-Match", clusterETag)
-				}
-				return nil
-			})
+			putResp, err := client.UpdateCluster(ctx, cluster, clusterRequest, authHeader, v202607.WithIfMatch(clusterETag))
 			if err != nil {
 				errorExit("put cluster: %v", err)
 			}

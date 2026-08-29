@@ -70,6 +70,7 @@ func setupCmd(cfg *kubehubcli.Config) *cobra.Command {
 
 			slog.Info("Waiting for cluster to be ready...")
 			var clusterInfo v202607.Cluster
+			var clusterETag string
 			clusterReady := false
 			deadline := time.Now().Add(10 * time.Minute)
 			for time.Now().Before(deadline) {
@@ -82,6 +83,9 @@ func setupCmd(cfg *kubehubcli.Config) *cobra.Command {
 
 				if getResp.StatusCode == http.StatusOK {
 					if err := json.NewDecoder(getResp.Body).Decode(&clusterInfo); err == nil {
+						if clusterInfo.Metadata != nil && clusterInfo.Metadata.Etag != nil {
+							clusterETag = *clusterInfo.Metadata.Etag
+						}
 						if clusterInfo.Status != nil && clusterInfo.Status.PublicDns != nil && *clusterInfo.Status.PublicDns != "" {
 							getResp.Body.Close()
 							slog.Info(fmt.Sprintf("PublicDNS: %s", *clusterInfo.Status.PublicDns))
@@ -124,7 +128,7 @@ func setupCmd(cfg *kubehubcli.Config) *cobra.Command {
 								},
 							},
 						}
-						updateResp, err := client.UpdateCluster(ctx, cluster, updateReq, authHeader)
+						updateResp, err := client.UpdateCluster(ctx, cluster, updateReq, authHeader, v202607.WithIfMatch(clusterETag))
 						if err != nil {
 							errorExit("update cluster network: %v", err)
 						}

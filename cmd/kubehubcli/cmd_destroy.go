@@ -130,12 +130,7 @@ This is a destructive operation that will:
 			}
 
 			slog.Info(fmt.Sprintf("--- Deleting cluster %s ---", cluster))
-			deleteResp, err := client.DeleteCluster(ctx, cluster, authHeader, func(ctx context.Context, req *http.Request) error {
-				if clusterETag != "" {
-					req.Header.Set("If-Match", clusterETag)
-				}
-				return nil
-			})
+			deleteResp, err := client.DeleteCluster(ctx, cluster, authHeader, v202607.WithIfMatch(clusterETag))
 			if err != nil {
 				errorExit("delete cluster request: %v", err)
 			}
