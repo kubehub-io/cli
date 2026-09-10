@@ -1,13 +1,11 @@
 package kubehubcli
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
-	"strings"
 
 	v202607 "github.com/kubehub-io/kubehubcli/pkg/clientlib/v202607"
 )
@@ -63,18 +61,7 @@ func ResetNode(opts *ResetOptions) error {
 		slog.Warn("")
 	}
 
-	fmt.Fprint(os.Stdout, "Are you sure you want to proceed? (type 'yes' to confirm): ")
-
-	scanner := bufio.NewScanner(os.Stdin)
-	if !scanner.Scan() {
-		slog.Info("Aborted.")
-		return nil
-	}
-	input := strings.TrimSpace(scanner.Text())
-	if !strings.EqualFold(input, "yes") {
-		slog.Info("Aborted.")
-		return nil
-	}
+	PromptConfirm("Are you sure you want to proceed?")
 	slog.Info("")
 
 	hostname, _ := os.Hostname()

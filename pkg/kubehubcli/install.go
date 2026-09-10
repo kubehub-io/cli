@@ -326,7 +326,8 @@ func joinNodeToCluster(client *v202607.Client, authHeader v202607.RequestEditorF
 		return fmt.Errorf("store certs: %w", err)
 	}
 
-	if isLaptop() && promptConfirm("Configure lid switch to keep node running when lid is closed?") {
+	if isLaptop() {
+		PromptConfirm("Configure lid switch to keep node running when lid is closed?")
 		if err := configureLogind(); err != nil {
 			return fmt.Errorf("configure logind: %w", err)
 		}
