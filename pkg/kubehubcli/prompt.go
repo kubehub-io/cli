@@ -8,14 +8,9 @@ import (
 	"strings"
 )
 
-func promptConfirm(msg string, args ...any) bool {
-	fmt.Fprintf(os.Stdout, msg+" (yes/no): ", args...)
-	scanner := bufio.NewScanner(os.Stdin)
-	if !scanner.Scan() {
-		return false
-	}
-	input := strings.TrimSpace(scanner.Text())
-	return strings.EqualFold(input, "yes") || strings.EqualFold(input, "y")
+func PromptConfirm(msg string, args ...any) {
+	fmt.Fprintf(os.Stdout, msg+" Press Enter to continue: ", args...)
+	bufio.NewReader(os.Stdin).ReadBytes('\n')
 }
 
 func promptSelect(msg string, options []string) int {

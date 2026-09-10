@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -9,7 +8,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"strings"
 
 	v202607 "github.com/kubehub-io/kubehubcli/pkg/clientlib/v202607"
 	"github.com/kubehub-io/kubehubcli/pkg/kubehubcli"
@@ -166,14 +164,7 @@ func nodeDeleteCmd(cfg *kubehubcli.Config) *cobra.Command {
 				os.Exit(1)
 			}
 
-			fmt.Printf("Are you sure you want to delete node %q from cluster %q? [y/N]: ", node, cluster)
-			reader := bufio.NewReader(os.Stdin)
-			answer, _ := reader.ReadString('\n')
-			answer = strings.TrimSpace(answer)
-			if strings.ToLower(answer) != "y" && strings.ToLower(answer) != "yes" {
-				slog.Info("Deletion cancelled")
-				return
-			}
+			kubehubcli.PromptConfirm("Are you sure you want to delete node %q from cluster %q?", node, cluster)
 
 			ctx := context.Background()
 

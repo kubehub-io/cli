@@ -95,15 +95,12 @@ func checkRandomMAC(iface string, osConfig OSConfigurator, result *PreflightResu
 	slog.Warn("      Random MACs can change on reboot and break static IP binding.")
 	slog.Warn("      Recommendation: disable random MAC for stability.")
 
-	if promptConfirm("      Disable random MAC for %s?", iface) {
-		if err := osConfig.DisableRandomMAC(iface); err != nil {
-			return fmt.Errorf("disable random MAC: %w", err)
-		}
-		slog.Info("      Random MAC disabled. Reconnect the interface for changes to take effect.")
-		result.MACFixed = true
-	} else {
-		slog.Info("      Skipped.")
+	PromptConfirm("      Disable random MAC for %s?", iface)
+	if err := osConfig.DisableRandomMAC(iface); err != nil {
+		return fmt.Errorf("disable random MAC: %w", err)
 	}
+	slog.Info("      Random MAC disabled. Reconnect the interface for changes to take effect.")
+	result.MACFixed = true
 	return nil
 }
 
@@ -123,35 +120,32 @@ func checkStaticIP(iface string, info *HostInfo, osConfig OSConfigurator, result
 	slog.Warn(fmt.Sprintf("  [!] This node uses DHCP (dynamic IP: %s)", ip))
 	slog.Warn("      Static IP is required for Kubernetes nodes.")
 
-	if promptConfirm("      Configure this host to keep IP %s as static?", ip) {
-		gw, err := defaultGateway()
-		if err != nil {
-			gw = ip[:strings.LastIndex(ip, ".")+1] + "1"
-			slog.Info(fmt.Sprintf("      (using assumed gateway: %s)", gw))
-		}
-
-		dnsServers := readNameservers(DetectResolvConfFile())
-		if len(dnsServers) == 0 {
-			dnsServers = []string{gw}
-		}
-
-		if iface != "" {
-			if err := osConfig.ConfigureStaticIP(iface, ip, gw, dnsServers); err != nil {
-				return fmt.Errorf("configure static IP: %w", err)
-			}
-			slog.Info("      Static IP configured. Reboot recommended.")
-		} else {
-			slog.Info("      No interface found for IP, skipping configuration.")
-			slog.Info("      Please configure a static IP manually.")
-		}
-
-		if mac != "" {
-			slog.Info(fmt.Sprintf("      For a more robust setup, reserve %s for MAC %s on your router.", ip, mac))
-		}
-		result.StaticIPConfigured = true
-	} else {
-		slog.Info("      Skipped.")
+	PromptConfirm("      Configure this host to keep IP %s as static?", ip)
+	gw, err := defaultGateway()
+	if err != nil {
+		gw = ip[:strings.LastIndex(ip, ".")+1] + "1"
+		slog.Info(fmt.Sprintf("      (using assumed gateway: %s)", gw))
 	}
+
+	dnsServers := readNameservers(DetectResolvConfFile())
+	if len(dnsServers) == 0 {
+		dnsServers = []string{gw}
+	}
+
+	if iface != "" {
+		if err := osConfig.ConfigureStaticIP(iface, ip, gw, dnsServers); err != nil {
+			return fmt.Errorf("configure static IP: %w", err)
+		}
+		slog.Info("      Static IP configured. Reboot recommended.")
+	} else {
+		slog.Info("      No interface found for IP, skipping configuration.")
+		slog.Info("      Please configure a static IP manually.")
+	}
+
+	if mac != "" {
+		slog.Info(fmt.Sprintf("      For a more robust setup, reserve %s for MAC %s on your router.", ip, mac))
+	}
+	result.StaticIPConfigured = true
 	return nil
 }
 
