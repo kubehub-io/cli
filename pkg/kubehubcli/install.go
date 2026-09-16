@@ -333,9 +333,11 @@ func joinNodeToCluster(client *v202607.Client, authHeader v202607.RequestEditorF
 		}
 	}
 
-	fmt.Print("Installing kubernetes node requires some system config tweaks, press Enter to proceed: ")
-	if _, err := bufio.NewReader(os.Stdin).ReadString('\n'); err != nil {
-		return fmt.Errorf("read confirmation: %w", err)
+	if !AutoAccept() {
+		fmt.Print("Installing kubernetes node requires some system config tweaks, press Enter to proceed: ")
+		if _, err := bufio.NewReader(os.Stdin).ReadString('\n'); err != nil {
+			return fmt.Errorf("read confirmation: %w", err)
+		}
 	}
 
 	if err := applySysctl(); err != nil {
