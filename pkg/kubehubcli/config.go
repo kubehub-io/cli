@@ -11,6 +11,7 @@ type Config struct {
 	Server   string `yaml:"server"`
 	Issuer   string `yaml:"issuer"`
 	ClientID string `yaml:"client_id"`
+	Token    string `yaml:"-" json:"-"`
 }
 
 func (c *Config) setDefaults() {
