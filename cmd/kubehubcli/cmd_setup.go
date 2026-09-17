@@ -145,6 +145,7 @@ func setupCmd(cfg *kubehubcli.Config) *cobra.Command {
 				ServerURL:     cfg.Server,
 				OIDCIssuerURL: cfg.Issuer,
 				OIDCClientID:  cfg.ClientID,
+				Token:         cfg.Token,
 				WaitMessage:   "Waiting for cluster ready",
 				Verbose:       verbose,
 				Labels:        getMapFlag(cmd, "label"),

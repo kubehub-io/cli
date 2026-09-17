@@ -118,6 +118,7 @@ This is a destructive operation that will:
 				ServerURL:     cfg.Server,
 				OIDCIssuerURL: cfg.Issuer,
 				OIDCClientID:  cfg.ClientID,
+				Token:         cfg.Token,
 				Verbose:       verbose,
 			}
 			if err := kubehubcli.ResetNode(resetOpts); err != nil {

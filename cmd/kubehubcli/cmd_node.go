@@ -44,6 +44,7 @@ func nodeJoinCmd(cfg *kubehubcli.Config) *cobra.Command {
 				ServerURL:     cfg.Server,
 				OIDCIssuerURL: cfg.Issuer,
 				OIDCClientID:  cfg.ClientID,
+				Token:         cfg.Token,
 				WaitMessage:   "Waiting for node registration",
 				Verbose:       verbose,
 				Labels:        getMapFlag(cmd, "label"),
