@@ -15,6 +15,7 @@ type ResetOptions struct {
 	ServerURL     string
 	OIDCIssuerURL string
 	OIDCClientID  string
+	Token         string
 	Verbose       bool
 }
 
@@ -69,11 +70,17 @@ func ResetNode(opts *ResetOptions) error {
 		slog.Info(fmt.Sprintf("--- Deleting node %s from cluster %s ---", hostname, opts.ClusterName))
 
 		ctx := context.Background()
-		auth := NewAuthenticator(opts.OIDCIssuerURL, opts.OIDCClientID).WithVerbose(opts.Verbose)
-		token, err := auth.Authenticate(ctx)
-		if err != nil {
-			slog.Warn(fmt.Sprintf("  warning: authentication failed: %v", err))
-		} else {
+		token := opts.Token
+		if token == "" {
+			auth := NewAuthenticator(opts.OIDCIssuerURL, opts.OIDCClientID).WithVerbose(opts.Verbose)
+			var err error
+			token, err = auth.Authenticate(ctx)
+			if err != nil {
+				slog.Warn(fmt.Sprintf("  warning: authentication failed: %v", err))
+				token = ""
+			}
+		}
+		if token != "" {
 			client, err := v202607.NewClient(opts.ServerURL)
 			if err != nil {
 				slog.Warn(fmt.Sprintf("  warning: create client: %v", err))

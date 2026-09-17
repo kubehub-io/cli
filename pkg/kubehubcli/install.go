@@ -94,6 +94,7 @@ type JoinOptions struct {
 	NodeIP        string
 	OIDCIssuerURL string
 	OIDCClientID  string
+	Token         string
 	ServerURL     string
 	WaitMessage   string
 	Verbose       bool
@@ -104,10 +105,14 @@ type JoinOptions struct {
 func JoinCluster(opts *JoinOptions) error {
 	ctx := context.Background()
 
-	auth := NewAuthenticator(opts.OIDCIssuerURL, opts.OIDCClientID).WithVerbose(opts.Verbose)
-	token, err := auth.Authenticate(ctx)
-	if err != nil {
-		return fmt.Errorf("authentication: %w", err)
+	token := opts.Token
+	if token == "" {
+		auth := NewAuthenticator(opts.OIDCIssuerURL, opts.OIDCClientID).WithVerbose(opts.Verbose)
+		var err error
+		token, err = auth.Authenticate(ctx)
+		if err != nil {
+			return fmt.Errorf("authentication: %w", err)
+		}
 	}
 
 	client, err := v202607.NewClient(opts.ServerURL)
@@ -142,10 +147,14 @@ func JoinCluster(opts *JoinOptions) error {
 }
 
 func JoinClusterWithCluster(opts *JoinOptions, clusterInfo *v202607.Cluster) error {
-	auth := NewAuthenticator(opts.OIDCIssuerURL, opts.OIDCClientID).WithVerbose(opts.Verbose)
-	token, err := auth.Authenticate(context.Background())
-	if err != nil {
-		return fmt.Errorf("authentication: %w", err)
+	token := opts.Token
+	if token == "" {
+		auth := NewAuthenticator(opts.OIDCIssuerURL, opts.OIDCClientID).WithVerbose(opts.Verbose)
+		var err error
+		token, err = auth.Authenticate(context.Background())
+		if err != nil {
+			return fmt.Errorf("authentication: %w", err)
+		}
 	}
 
 	client, err := v202607.NewClient(opts.ServerURL)

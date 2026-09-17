@@ -20,6 +20,7 @@ func resetCmd(cfg *kubehubcli.Config) *cobra.Command {
 				ServerURL:     cfg.Server,
 				OIDCIssuerURL: cfg.Issuer,
 				OIDCClientID:  cfg.ClientID,
+				Token:         cfg.Token,
 				Verbose:       verbose,
 			}
 			if err := kubehubcli.ResetNode(opts); err != nil {
