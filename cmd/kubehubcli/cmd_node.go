@@ -33,6 +33,7 @@ func nodeJoinCmd(cfg *kubehubcli.Config) *cobra.Command {
 		Run: func(cmd *cobra.Command, args []string) {
 			cluster, _ := cmd.Flags().GetString("cluster")
 			nodeIP, _ := cmd.Flags().GetString("node-ip")
+			installGvisor, _ := cmd.Flags().GetBool("install-gvisor")
 			if cluster == "" {
 				cmd.Help()
 				os.Exit(1)
@@ -47,6 +48,7 @@ func nodeJoinCmd(cfg *kubehubcli.Config) *cobra.Command {
 				Token:         cfg.Token,
 				WaitMessage:   "Waiting for node registration",
 				Verbose:       verbose,
+				InstallGvisor: installGvisor,
 				Labels:        getMapFlag(cmd, "label"),
 				Annotations:   getMapFlag(cmd, "annotation"),
 			}
@@ -58,6 +60,7 @@ func nodeJoinCmd(cfg *kubehubcli.Config) *cobra.Command {
 	}
 	cmd.Flags().String("cluster", "", "Cluster name (required)")
 	cmd.Flags().String("node-ip", "", "Node IP address (auto-detected if not set)")
+	cmd.Flags().Bool("install-gvisor", false, "Install gVisor (runsc) and register the runsc containerd runtime handler")
 	cmd.Flags().StringArray("label", nil, "Node label (key=value, can be specified multiple times)")
 	cmd.Flags().StringArray("annotation", nil, "Node annotation (key=value, can be specified multiple times)")
 	cmd.MarkFlagRequired("cluster")

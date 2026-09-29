@@ -89,6 +89,18 @@ func writeFileAsRoot(path string, data []byte, perm os.FileMode) error {
 	return nil
 }
 
+func appendFileAsRoot(path string, data []byte) error {
+	args := sudoArgs("tee", "-a", path)
+	cmd := exec.Command(args[0], args[1:]...)
+	cmd.Stdin = bytes.NewReader(data)
+	cmd.Stdout = io.Discard
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("append %s: %w", path, err)
+	}
+	return nil
+}
+
 type JoinOptions struct {
 	ClusterName   string
 	NodeIP        string
@@ -98,6 +110,7 @@ type JoinOptions struct {
 	ServerURL     string
 	WaitMessage   string
 	Verbose       bool
+	InstallGvisor bool
 	Labels        map[string]string
 	Annotations   map[string]string
 }
@@ -389,6 +402,16 @@ func joinNodeToCluster(client *v202607.Client, authHeader v202607.RequestEditorF
 		return fmt.Errorf("configure containerd: %w", err)
 	}
 
+	if opts.InstallGvisor {
+		if err := installGvisor(); err != nil {
+			return fmt.Errorf("install gvisor: %w", err)
+		}
+
+		if err := configureContainerdGvisor(info); err != nil {
+			return fmt.Errorf("configure gvisor: %w", err)
+		}
+	}
+
 	if err := installIscsiadm(); err != nil {
 		return fmt.Errorf("install iscsiadm: %w", err)
 	}
@@ -415,6 +438,10 @@ func joinNodeToCluster(client *v202607.Client, authHeader v202607.RequestEditorF
 
 	slog.Info("=== Join Complete ===")
 	slog.Info("Kubelet has been started. Check status with: systemctl status kubelet")
+	if opts.InstallGvisor {
+		slog.Info("gVisor is installed. Enable it per workload with a RuntimeClass:")
+		slog.Info(fmt.Sprintf("  handler: %s, runsc: %s", GvisorRuntimeHandler, RunscBinaryPath))
+	}
 	return nil
 }
 
