@@ -8,10 +8,12 @@ import (
 )
 
 type Config struct {
-	Server   string `yaml:"server"`
-	Issuer   string `yaml:"issuer"`
-	ClientID string `yaml:"client_id"`
-	Token    string `yaml:"-" json:"-"`
+	Server       string `yaml:"server"`
+	Issuer       string `yaml:"issuer"`
+	ClientID     string `yaml:"client_id"`
+	ClientSecret string `yaml:"-"`
+	GrantType    string `yaml:"grant_type"`
+	Token        string `yaml:"-" json:"-"`
 }
 
 func (c *Config) setDefaults() {

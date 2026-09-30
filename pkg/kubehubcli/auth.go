@@ -23,12 +23,14 @@ import (
 )
 
 type Authenticator struct {
-	IssuerURL string
-	ClientID  string
-	Scopes    []string
-	tokenFile string
-	forceAuth bool
-	Verbose   bool
+	IssuerURL    string
+	ClientID     string
+	ClientSecret string
+	GrantType    string
+	Scopes       []string
+	tokenFile    string
+	forceAuth    bool
+	Verbose      bool
 }
 
 func NewAuthenticator(issuerURL, clientID string) *Authenticator {
@@ -61,9 +63,19 @@ func (a *Authenticator) WithForceAuth(force bool) *Authenticator {
 	return a
 }
 
+func (a *Authenticator) WithClientSecret(secret string) *Authenticator {
+	a.ClientSecret = secret
+	return a
+}
+
+func (a *Authenticator) WithGrantType(gt string) *Authenticator {
+	a.GrantType = gt
+	return a
+}
+
 func (a *Authenticator) Authenticate(ctx context.Context) (string, error) {
 	if a.Verbose {
-		slog.Info(fmt.Sprintf("Authenticator: issuer=%s client-id=%s token-file=%s", a.IssuerURL, a.ClientID, a.tokenFile))
+		slog.Info(fmt.Sprintf("Authenticator: issuer=%s client-id=%s grant-type=%s token-file=%s", a.IssuerURL, a.ClientID, a.GrantType, a.tokenFile))
 	}
 
 	if !a.forceAuth {
@@ -85,18 +97,27 @@ func (a *Authenticator) Authenticate(ctx context.Context) (string, error) {
 		slog.Info("Authenticator: force-auth enabled, skipping cached token")
 	}
 
-	hasBrowser, err := detectBrowser()
-	if err != nil {
-		return "", fmt.Errorf("detect browser: %w", err)
+	switch strings.ToLower(a.GrantType) {
+	case "client-credential", "client_credentials":
+		if a.ClientSecret == "" {
+			return "", fmt.Errorf("client-credentials grant requires --oidc-client-secret")
+		}
+		return a.clientCredentials(ctx)
+	case "device-code", "device_code":
+		return a.deviceAuth(ctx)
+	default:
+		hasBrowser, err := detectBrowser()
+		if err != nil {
+			return "", fmt.Errorf("detect browser: %w", err)
+		}
+		if a.Verbose {
+			slog.Info(fmt.Sprintf("Authenticator: browser detected=%v os=%s", hasBrowser, runtime.GOOS))
+		}
+		if hasBrowser && runtime.GOOS != "windows" && runtime.GOOS != "darwin" {
+			return a.webAuth(ctx)
+		}
+		return a.deviceAuth(ctx)
 	}
-	if a.Verbose {
-		slog.Info(fmt.Sprintf("Authenticator: browser detected=%v os=%s", hasBrowser, runtime.GOOS))
-	}
-
-	if hasBrowser && runtime.GOOS != "windows" && runtime.GOOS != "darwin" {
-		return a.webAuth(ctx)
-	}
-	return a.deviceAuth(ctx)
 }
 
 func (a *Authenticator) oauth2Config() *oauth2.Config {
@@ -167,6 +188,58 @@ func (a *Authenticator) deviceAuth(ctx context.Context) (string, error) {
 	if a.Verbose {
 		slog.Info(fmt.Sprintf("DeviceAuth: token saved to %s", a.tokenFile))
 	}
+	return token.AccessToken, nil
+}
+
+func (a *Authenticator) clientCredentials(ctx context.Context) (string, error) {
+	tokenURL, _ := url.JoinPath(a.IssuerURL, "/protocol/openid-connect/token")
+
+	if a.Verbose {
+		slog.Info(fmt.Sprintf("ClientCredentials: token-url=%s client-id=%s", tokenURL, a.ClientID))
+	}
+
+	data := url.Values{}
+	data.Set("grant_type", "client_credentials")
+	data.Set("client_id", a.ClientID)
+	data.Set("client_secret", a.ClientSecret)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenURL, strings.NewReader(data.Encode()))
+	if err != nil {
+		return "", fmt.Errorf("create token request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	httpClient := &http.Client{
+		Transport: &loggingRoundTripper{next: http.DefaultTransport, verbose: a.Verbose},
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("token request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("read token response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("token request failed (status %d): %s", resp.StatusCode, string(body))
+	}
+
+	var token oauth2.Token
+	if err := json.Unmarshal(body, &token); err != nil {
+		return "", fmt.Errorf("parse token response: %w", err)
+	}
+
+	if a.Verbose {
+		slog.Info(fmt.Sprintf("ClientCredentials: token received (expiry=%s)", token.Expiry))
+	}
+
+	if err := a.saveToken(&token); err != nil {
+		return "", fmt.Errorf("save token: %w", err)
+	}
+
 	return token.AccessToken, nil
 }
 
@@ -272,9 +345,12 @@ func (a *Authenticator) loadToken() (*oauth2.Token, error) {
 
 	if token.RefreshToken == "" {
 		if a.Verbose {
-			slog.Info("loadToken: no refresh token, need re-authentication")
+			slog.Info("loadToken: no refresh token")
 		}
-		return nil, fmt.Errorf("no refresh token")
+		if !token.Expiry.IsZero() && token.Expiry.After(time.Now()) {
+			return &token, nil
+		}
+		return nil, fmt.Errorf("token expired and no refresh token")
 	}
 
 	conf := a.oauth2Config()

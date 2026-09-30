@@ -23,7 +23,10 @@ func withBearerToken(token string) v202607.RequestEditorFn {
 func getAuthenticatedClient(ctx context.Context, cfg *kubehubcli.Config) (*v202607.Client, string, error) {
 	token := cfg.Token
 	if token == "" {
-		auth := kubehubcli.NewAuthenticator(cfg.Issuer, cfg.ClientID).WithVerbose(verbose)
+		auth := kubehubcli.NewAuthenticator(cfg.Issuer, cfg.ClientID).
+			WithVerbose(verbose).
+			WithClientSecret(cfg.ClientSecret).
+			WithGrantType(cfg.GrantType)
 		var err error
 		token, err = auth.Authenticate(ctx)
 		if err != nil {
