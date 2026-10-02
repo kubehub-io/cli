@@ -279,6 +279,9 @@ func nodeReconcileCmd(cfg *kubehubcli.Config) *cobra.Command {
 				errorExit("%s", string(body))
 			}
 
+			if installGvisor {
+				kubehubcli.GvisorRuntimeClassHint()
+			}
 			slog.Info(fmt.Sprintf("Node %s reconciled successfully", node))
 		},
 	}

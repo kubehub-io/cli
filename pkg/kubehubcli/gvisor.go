@@ -211,9 +211,15 @@ func InstallGvisor() error {
 		return fmt.Errorf("ensure containerd: %w", err)
 	}
 
-	slog.Info(fmt.Sprintf("gVisor runtime handler %q is registered, enable it per workload with a RuntimeClass", GvisorRuntimeHandler))
-
 	return nil
+}
+
+// GvisorRuntimeClassHint logs how to opt workloads into the runsc runtime.
+// Callers emit it at the end of a successful run so it lands directly above
+// that command's completion message.
+func GvisorRuntimeClassHint() {
+	slog.Info("gVisor is installed. Enable it per workload with a RuntimeClass:")
+	slog.Info(fmt.Sprintf("  handler: %s, runsc: %s", GvisorRuntimeHandler, RunscBinaryPath))
 }
 
 // configureContainerdGvisor registers the runsc runtime handler with containerd

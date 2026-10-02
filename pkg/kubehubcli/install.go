@@ -432,12 +432,11 @@ func joinNodeToCluster(client *v202607.Client, authHeader v202607.RequestEditorF
 		return fmt.Errorf("enable kubelet: %w", err)
 	}
 
-	slog.Info("=== Join Complete ===")
-	slog.Info("Kubelet has been started. Check status with: systemctl status kubelet")
 	if opts.InstallGvisor {
-		slog.Info("gVisor is installed. Enable it per workload with a RuntimeClass:")
-		slog.Info(fmt.Sprintf("  handler: %s, runsc: %s", GvisorRuntimeHandler, RunscBinaryPath))
+		GvisorRuntimeClassHint()
 	}
+	slog.Info("Kubelet has been started. Check status with: systemctl status kubelet")
+	slog.Info("=== Join Complete ===")
 	return nil
 }
 
