@@ -175,6 +175,47 @@ func verifySHA512(archivePath, sumPath string) error {
 	return nil
 }
 
+// installGvisorRuntime installs gVisor and registers the runsc runtime handler
+// with containerd. It does not restart containerd; callers that need the change
+// live must call ensureContainerd afterwards.
+func installGvisorRuntime(info *HostInfo) error {
+	if err := installGvisor(); err != nil {
+		return fmt.Errorf("install gvisor: %w", err)
+	}
+
+	if err := configureContainerdGvisor(info); err != nil {
+		return fmt.Errorf("configure gvisor: %w", err)
+	}
+
+	return nil
+}
+
+// InstallGvisor installs gVisor on this host and registers the runsc runtime
+// handler with containerd, restarting containerd so the handler is live. It is
+// the day-2 entry point used when a node is already joined to a cluster.
+func InstallGvisor() error {
+	info, err := DetectHost()
+	if err != nil {
+		return fmt.Errorf("detect host: %w", err)
+	}
+
+	if info.Containerd == nil {
+		return fmt.Errorf("containerd is not installed on this host, cannot register the runsc runtime handler")
+	}
+
+	if err := installGvisorRuntime(info); err != nil {
+		return err
+	}
+
+	if err := ensureContainerd(); err != nil {
+		return fmt.Errorf("ensure containerd: %w", err)
+	}
+
+	slog.Info(fmt.Sprintf("gVisor runtime handler %q is registered, enable it per workload with a RuntimeClass", GvisorRuntimeHandler))
+
+	return nil
+}
+
 // configureContainerdGvisor registers the runsc runtime handler with containerd
 // and writes the runsc shim configuration it points at.
 // See https://gvisor.dev/docs/user_guide/containerd/quick_start/

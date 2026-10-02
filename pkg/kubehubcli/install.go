@@ -403,12 +403,8 @@ func joinNodeToCluster(client *v202607.Client, authHeader v202607.RequestEditorF
 	}
 
 	if opts.InstallGvisor {
-		if err := installGvisor(); err != nil {
-			return fmt.Errorf("install gvisor: %w", err)
-		}
-
-		if err := configureContainerdGvisor(info); err != nil {
-			return fmt.Errorf("configure gvisor: %w", err)
+		if err := installGvisorRuntime(info); err != nil {
+			return err
 		}
 	}
 

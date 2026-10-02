@@ -200,6 +200,9 @@ func nodeDeleteCmd(cfg *kubehubcli.Config) *cobra.Command {
 	return cmd
 }
 
+// installGvisorOnHost is a seam so tests can stub the host-side gVisor install.
+var installGvisorOnHost = kubehubcli.InstallGvisor
+
 func nodeReconcileCmd(cfg *kubehubcli.Config) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "reconcile",
@@ -207,12 +210,20 @@ func nodeReconcileCmd(cfg *kubehubcli.Config) *cobra.Command {
 		Run: func(cmd *cobra.Command, args []string) {
 			cluster, _ := cmd.Flags().GetString("cluster")
 			node, _ := cmd.Flags().GetString("node")
+			installGvisor, _ := cmd.Flags().GetBool("install-gvisor")
 			if cluster == "" || node == "" {
 				cmd.Help()
 				os.Exit(1)
 			}
 
 			ctx := context.Background()
+
+			if installGvisor {
+				kubehubcli.PromptConfirm("This will install gVisor on this host and restart containerd. Continue?")
+				if err := installGvisorOnHost(); err != nil {
+					errorExit("%v", err)
+				}
+			}
 
 			client, token, err := getAuthenticatedClient(ctx, cfg)
 			if err != nil {
@@ -273,6 +284,7 @@ func nodeReconcileCmd(cfg *kubehubcli.Config) *cobra.Command {
 	}
 	cmd.Flags().String("cluster", "", "Cluster name (required)")
 	cmd.Flags().String("node", "", "Node name (required)")
+	cmd.Flags().Bool("install-gvisor", false, "Install gVisor (runsc) on this host and register the runsc containerd runtime handler (day-2)")
 	cmd.MarkFlagRequired("cluster")
 	cmd.MarkFlagRequired("node")
 	return cmd
