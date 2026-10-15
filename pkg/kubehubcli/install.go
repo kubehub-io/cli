@@ -111,6 +111,7 @@ type JoinOptions struct {
 	WaitMessage   string
 	Verbose       bool
 	InstallGvisor bool
+	InstallSmolvm bool
 	Labels        map[string]string
 	Annotations   map[string]string
 }
@@ -408,6 +409,12 @@ func joinNodeToCluster(client *v202607.Client, authHeader v202607.RequestEditorF
 		}
 	}
 
+	if opts.InstallSmolvm {
+		if err := installSmolvmRuntime(info); err != nil {
+			return err
+		}
+	}
+
 	if err := installIscsiadm(); err != nil {
 		return fmt.Errorf("install iscsiadm: %w", err)
 	}
@@ -434,6 +441,9 @@ func joinNodeToCluster(client *v202607.Client, authHeader v202607.RequestEditorF
 
 	if opts.InstallGvisor {
 		GvisorRuntimeClassHint()
+	}
+	if opts.InstallSmolvm {
+		SmolvmRuntimeClassHint()
 	}
 	slog.Info("Kubelet has been started. Check status with: systemctl status kubelet")
 	slog.Info("=== Join Complete ===")

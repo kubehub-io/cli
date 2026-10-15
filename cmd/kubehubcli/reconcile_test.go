@@ -129,6 +129,19 @@ func stubGvisorInstall(t *testing.T, calls *int) {
 	t.Cleanup(func() { kubehubcli.SetAutoAccept(false) })
 }
 
+func stubSmolvmInstall(t *testing.T, calls *int) {
+	t.Helper()
+	orig := installSmolvmOnHost
+	t.Cleanup(func() { installSmolvmOnHost = orig })
+	installSmolvmOnHost = func() error {
+		*calls++
+		return nil
+	}
+
+	kubehubcli.SetAutoAccept(true)
+	t.Cleanup(func() { kubehubcli.SetAutoAccept(false) })
+}
+
 func nodeReconcileServer(t *testing.T, putCalls *int) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -190,6 +203,52 @@ func TestNodeReconcileSkipsGvisorByDefault(t *testing.T) {
 
 	if gvisorCalls != 0 {
 		t.Fatalf("gVisor install calls = %d, want 0", gvisorCalls)
+	}
+	if putCalls != 1 {
+		t.Fatalf("node update calls = %d, want 1", putCalls)
+	}
+}
+
+func TestNodeReconcileInstallSmolvm(t *testing.T) {
+	withTestHome(t)
+	writeCachedToken(t)
+
+	var smolvmCalls, putCalls int
+	stubSmolvmInstall(t, &smolvmCalls)
+
+	srv := nodeReconcileServer(t, &putCalls)
+
+	cmd := nodeReconcileCmd(&kubehubcli.Config{Server: srv.URL})
+	cmd.SetArgs([]string{"--cluster", "pp2", "--node", "node1", "--install-smolvm"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+
+	if smolvmCalls != 1 {
+		t.Fatalf("smolvm install calls = %d, want 1", smolvmCalls)
+	}
+	if putCalls != 1 {
+		t.Fatalf("node update calls = %d, want 1", putCalls)
+	}
+}
+
+func TestNodeReconcileSkipsSmolvmByDefault(t *testing.T) {
+	withTestHome(t)
+	writeCachedToken(t)
+
+	var smolvmCalls, putCalls int
+	stubSmolvmInstall(t, &smolvmCalls)
+
+	srv := nodeReconcileServer(t, &putCalls)
+
+	cmd := nodeReconcileCmd(&kubehubcli.Config{Server: srv.URL})
+	cmd.SetArgs([]string{"--cluster", "pp2", "--node", "node1"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+
+	if smolvmCalls != 0 {
+		t.Fatalf("smolvm install calls = %d, want 0", smolvmCalls)
 	}
 	if putCalls != 1 {
 		t.Fatalf("node update calls = %d, want 1", putCalls)

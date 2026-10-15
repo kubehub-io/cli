@@ -34,6 +34,7 @@ func nodeJoinCmd(cfg *kubehubcli.Config) *cobra.Command {
 			cluster, _ := cmd.Flags().GetString("cluster")
 			nodeIP, _ := cmd.Flags().GetString("node-ip")
 			installGvisor, _ := cmd.Flags().GetBool("install-gvisor")
+			installSmolvm, _ := cmd.Flags().GetBool("install-smolvm")
 			if cluster == "" {
 				cmd.Help()
 				os.Exit(1)
@@ -49,6 +50,7 @@ func nodeJoinCmd(cfg *kubehubcli.Config) *cobra.Command {
 				WaitMessage:   "Waiting for node registration",
 				Verbose:       verbose,
 				InstallGvisor: installGvisor,
+				InstallSmolvm: installSmolvm,
 				Labels:        getMapFlag(cmd, "label"),
 				Annotations:   getMapFlag(cmd, "annotation"),
 			}
@@ -61,6 +63,7 @@ func nodeJoinCmd(cfg *kubehubcli.Config) *cobra.Command {
 	cmd.Flags().String("cluster", "", "Cluster name (required)")
 	cmd.Flags().String("node-ip", "", "Node IP address (auto-detected if not set)")
 	cmd.Flags().Bool("install-gvisor", false, "Install gVisor (runsc) and register the runsc containerd runtime handler")
+	cmd.Flags().Bool("install-smolvm", false, "Install smolvm and register the smolvm containerd runtime handler (requires /dev/kvm)")
 	cmd.Flags().StringArray("label", nil, "Node label (key=value, can be specified multiple times)")
 	cmd.Flags().StringArray("annotation", nil, "Node annotation (key=value, can be specified multiple times)")
 	cmd.MarkFlagRequired("cluster")
@@ -203,6 +206,9 @@ func nodeDeleteCmd(cfg *kubehubcli.Config) *cobra.Command {
 // installGvisorOnHost is a seam so tests can stub the host-side gVisor install.
 var installGvisorOnHost = kubehubcli.InstallGvisor
 
+// installSmolvmOnHost is a seam so tests can stub the host-side smolvm install.
+var installSmolvmOnHost = kubehubcli.InstallSmolvm
+
 func nodeReconcileCmd(cfg *kubehubcli.Config) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "reconcile",
@@ -211,6 +217,7 @@ func nodeReconcileCmd(cfg *kubehubcli.Config) *cobra.Command {
 			cluster, _ := cmd.Flags().GetString("cluster")
 			node, _ := cmd.Flags().GetString("node")
 			installGvisor, _ := cmd.Flags().GetBool("install-gvisor")
+			installSmolvm, _ := cmd.Flags().GetBool("install-smolvm")
 			if cluster == "" || node == "" {
 				cmd.Help()
 				os.Exit(1)
@@ -221,6 +228,13 @@ func nodeReconcileCmd(cfg *kubehubcli.Config) *cobra.Command {
 			if installGvisor {
 				kubehubcli.PromptConfirm("This will install gVisor on this host and restart containerd. Continue?")
 				if err := installGvisorOnHost(); err != nil {
+					errorExit("%v", err)
+				}
+			}
+
+			if installSmolvm {
+				kubehubcli.PromptConfirm("This will install smolvm on this host and restart containerd. Continue?")
+				if err := installSmolvmOnHost(); err != nil {
 					errorExit("%v", err)
 				}
 			}
@@ -282,12 +296,16 @@ func nodeReconcileCmd(cfg *kubehubcli.Config) *cobra.Command {
 			if installGvisor {
 				kubehubcli.GvisorRuntimeClassHint()
 			}
+			if installSmolvm {
+				kubehubcli.SmolvmRuntimeClassHint()
+			}
 			slog.Info(fmt.Sprintf("Node %s reconciled successfully", node))
 		},
 	}
 	cmd.Flags().String("cluster", "", "Cluster name (required)")
 	cmd.Flags().String("node", "", "Node name (required)")
 	cmd.Flags().Bool("install-gvisor", false, "Install gVisor (runsc) on this host and register the runsc containerd runtime handler (day-2)")
+	cmd.Flags().Bool("install-smolvm", false, "Install smolvm on this host and register the smolvm containerd runtime handler (day-2, requires /dev/kvm)")
 	cmd.MarkFlagRequired("cluster")
 	cmd.MarkFlagRequired("node")
 	return cmd
