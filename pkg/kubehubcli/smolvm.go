@@ -52,13 +52,21 @@ func smolvmDistInstalled() bool {
 }
 
 // smolvmShimInstalled reports whether the containerd shim and the runtime
-// artifacts install-k8s-runtime.sh copies out of the distribution are in place.
+// artifacts it loads are in place.
 func smolvmShimInstalled() bool {
-	for _, path := range []string{
-		SmolvmShimBinaryPath,
-		filepath.Join(SmolvmDataDir, "lib", "libkrun.so"),
-		filepath.Join(SmolvmDataDir, "agent-rootfs"),
-	} {
+	paths := []string{SmolvmShimBinaryPath}
+
+	for _, artifact := range smolvmRuntimeArtifacts {
+		paths = append(paths, filepath.Join(SmolvmDataDir, artifact))
+	}
+
+	// The artifacts only count as installed once the libraries the engine
+	// dlopen()s are actually in the copied tree.
+	for _, lib := range smolvmRuntimeLibraries {
+		paths = append(paths, filepath.Join(SmolvmDataDir, "lib", lib))
+	}
+
+	for _, path := range paths {
 		if _, err := os.Stat(path); err != nil {
 			return false
 		}
@@ -198,35 +206,149 @@ func verifySHA256(path, want string) error {
 	return nil
 }
 
+// smolvmRuntimeArtifacts are the pieces of the distribution the shim loads at
+// pod-sandbox creation, copied out of SmolvmDir into SmolvmDataDir. libkrun
+// (and libkrunfw, which the guest kernel needs) are dlopen'ed by the shim and
+// by the boot process it spawns, agent-rootfs is the guest image the agent
+// runs in. Nothing boots without them.
+var smolvmRuntimeArtifacts = []string{"lib", "agent-rootfs"}
+
+// smolvmRuntimeLibraries are the libraries the engine dlopen()s out of
+// smolvmRuntimeArtifacts' lib directory.
+var smolvmRuntimeLibraries = []string{"libkrun.so", "libkrunfw.so"}
+
 // installSmolvmShim installs the containerd shim and the runtime artifacts it
-// loads with the script the release ships. The script deliberately leaves
-// /etc/containerd/config.toml to the operator, configureContainerdSmolvm
-// writes that part.
+// loads, then points containerd's environment at them. The release ships a
+// shell installer for the same job, but it only prints the containerd
+// registration instead of applying it, so the install is done here.
 // See https://github.com/smol-machines/smolvm/blob/main/docs/kubernetes.md
 func installSmolvmShim() error {
 	if smolvmShimInstalled() {
 		slog.Info("smolvm containerd shim already installed, skipping installation")
-		return nil
+
+		// The drop-in is cheap to rewrite and is the only thing tying the
+		// artifacts to containerd, so refresh it even on the skip path: it is
+		// what makes a re-run recover from a dropped-in uninstall.
+		return configureSmolvmShimEnv()
 	}
 
 	if _, err := os.Stat("/dev/kvm"); err != nil {
 		slog.Warn("warning: /dev/kvm is missing, pods using the smolvm runtime will not start")
 	}
 
-	script := filepath.Join(SmolvmDir, "kubernetes", "install-k8s-runtime.sh")
+	shimSource := filepath.Join(SmolvmDir, "containerd-shim-smolvm-v2")
 
-	if err := RunCmd(script,
-		"--shim", filepath.Join(SmolvmDir, "containerd-shim-smolvm-v2"),
-		"--runtime-dir", SmolvmDir,
-	); err != nil {
-		return fmt.Errorf("install smolvm shim: %w", err)
+	if _, err := os.Stat(shimSource); err != nil {
+		return fmt.Errorf("no containerd shim at %s: %w", shimSource, err)
 	}
+
+	for _, artifact := range smolvmRuntimeArtifacts {
+		if _, err := os.Stat(filepath.Join(SmolvmDir, artifact)); err != nil {
+			return fmt.Errorf("no %s in the smolvm distribution at %s: %w", artifact, SmolvmDir, err)
+		}
+	}
+
+	if err := RunCmd("mkdir", "-p", SmolvmDataDir); err != nil {
+		return fmt.Errorf("create %s: %w", SmolvmDataDir, err)
+	}
+
+	// cp -a, not a plain copy: agent-rootfs is mostly symlinks into /bin and its
+	// entries carry the modes the guest expects, so it has to be reproduced
+	// as-is rather than dereferenced.
+	for _, artifact := range smolvmRuntimeArtifacts {
+		source := filepath.Join(SmolvmDir, artifact)
+		target := filepath.Join(SmolvmDataDir, artifact)
+
+		if err := RunCmdCapture("rm", "-rf", target); err != nil {
+			return fmt.Errorf("remove %s: %w", target, err)
+		}
+
+		if err := RunCmdCapture("cp", "-a", source, target); err != nil {
+			return fmt.Errorf("copy %s: %w", source, err)
+		}
+
+		slog.Info(fmt.Sprintf("%s installed to %s", artifact, target))
+	}
+
+	// Write beside the destination and rename over it. containerd can still have
+	// the shim mapped from a running pod, and overwriting it in place fails on
+	// that; a rename swaps the file atomically instead.
+	if err := RunCmdCapture("install", "-Dm755", shimSource, SmolvmShimBinaryPath+".tmp"); err != nil {
+		return fmt.Errorf("install %s: %w", SmolvmShimBinaryPath, err)
+	}
+
+	if err := RunCmdCapture("mv", "-f", SmolvmShimBinaryPath+".tmp", SmolvmShimBinaryPath); err != nil {
+		return fmt.Errorf("install %s: %w", SmolvmShimBinaryPath, err)
+	}
+
+	slog.Info(fmt.Sprintf("smolvm containerd shim installed to %s", SmolvmShimBinaryPath))
+
+	return configureSmolvmShimEnv()
+}
+
+// configureSmolvmShimEnv writes the systemd drop-in that exports the runtime
+// artifact paths to containerd and, through it, to the shim. The shim lives in
+// /usr/local/bin, which is none of the places the engine looks for libkrun or
+// the guest rootfs on its own, so without this every pod sandbox fails to boot.
+func configureSmolvmShimEnv() error {
+	if !IsSystemdManaged() {
+		slog.Warn(fmt.Sprintf("warning: systemd not detected, set SMOLVM_AGENT_ROOTFS=%s and SMOLVM_LIB_DIR=%s in the environment containerd runs in",
+			filepath.Join(SmolvmDataDir, "agent-rootfs"), filepath.Join(SmolvmDataDir, "lib")))
+
+		return nil
+	}
+
+	if err := RunCmd("mkdir", "-p", filepath.Dir(smolvmDropInPath)); err != nil {
+		return fmt.Errorf("create %s: %w", filepath.Dir(smolvmDropInPath), err)
+	}
+
+	// Rewritten whole every run: it is kubehubcli's own file, and the only way
+	// a re-run can converge is by replacing whatever is there.
+	if err := writeFileAsRoot(smolvmDropInPath, []byte(renderContainerdSmolvmEnv()), 0644); err != nil {
+		return fmt.Errorf("write %s: %w", smolvmDropInPath, err)
+	}
+
+	// The restart that follows this picks the drop-in up.
+	if err := RunCmdCapture("systemctl", "daemon-reload"); err != nil {
+		return fmt.Errorf("systemd daemon-reload: %w", err)
+	}
+
+	// Read the unit back rather than trusting the path. systemd merges the .d
+	// directories across the whole unit load path, so seeing our file in
+	// `systemctl cat` is what proves the drop-in applies here, whether
+	// containerd.service itself came from /usr/lib, /usr/local/lib or /run.
+	out, err := runCmdOutput("systemctl", "cat", "containerd")
+	if err != nil {
+		return fmt.Errorf("containerd is not a systemd unit, set SMOLVM_AGENT_ROOTFS=%s and SMOLVM_LIB_DIR=%s in the environment it runs in: %w",
+			filepath.Join(SmolvmDataDir, "agent-rootfs"), filepath.Join(SmolvmDataDir, "lib"), err)
+	}
+
+	if !strings.Contains(out, smolvmDropInPath) {
+		return fmt.Errorf("%s is not part of the containerd unit, the shim will not find the runtime artifacts", smolvmDropInPath)
+	}
+
+	slog.Info(fmt.Sprintf("smolvm runtime environment written to %s", smolvmDropInPath))
 
 	return nil
 }
 
+// renderContainerdSmolvmEnv builds the systemd drop-in telling the smolvm
+// engine where its runtime artifacts live. containerd execs the shim rather
+// than loading it as a library, so the shim inherits this environment.
+func renderContainerdSmolvmEnv() string {
+	var b strings.Builder
+
+	b.WriteString("# Managed by kubehubcli, do not edit.\n")
+	b.WriteString("# Read by the smolvm engine at pod-sandbox creation.\n")
+	b.WriteString("[Service]\n")
+	fmt.Fprintf(&b, "Environment=SMOLVM_AGENT_ROOTFS=%s\n", filepath.Join(SmolvmDataDir, "agent-rootfs"))
+	fmt.Fprintf(&b, "Environment=SMOLVM_LIB_DIR=%s\n", filepath.Join(SmolvmDataDir, "lib"))
+
+	return b.String()
+}
+
 // configureContainerdSmolvm registers the smolvm runtime handler with
-// containerd. The block matches the one install-k8s-runtime.sh prints.
+// containerd. The block matches the one the release's installer prints.
 func configureContainerdSmolvm(info *HostInfo) error {
 	slog.Info("--- Configuring smolvm runtime in containerd ---")
 

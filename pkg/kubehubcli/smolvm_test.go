@@ -80,6 +80,43 @@ func TestRenderContainerdSmolvmRuntime(t *testing.T) {
 	require.Contains(t, v1, "[plugins.'io.containerd.grpc.v1.cri'.containerd.runtimes.smolvm]")
 }
 
+// The gVisor and smolvm blocks are appended to the same containerd config and
+// each one deletes only its own range on a re-run, so neither marker may appear
+// in the other's block.
+func TestContainerdRuntimeBlocksCoexist(t *testing.T) {
+	plugin := containerdCRICPluginV2
+
+	gvisor := renderContainerdGvisorRuntime(plugin)
+	smolvm := renderContainerdSmolvmRuntime(plugin)
+
+	require.NotContains(t, gvisor, smolvmConfigBeginMarker)
+	require.NotContains(t, gvisor, smolvmConfigEndMarker)
+	require.NotContains(t, smolvm, gvisorConfigBeginMarker)
+	require.NotContains(t, smolvm, gvisorConfigEndMarker)
+
+	// Both land in the same runtimes table, under their own handler.
+	require.Contains(t, gvisor, "runtimes.runsc]")
+	require.Contains(t, smolvm, "runtimes.smolvm]")
+}
+
+func TestRenderContainerdSmolvmEnv(t *testing.T) {
+	out := renderContainerdSmolvmEnv()
+
+	require.Contains(t, out, "[Service]")
+	require.Contains(t, out, "Environment=SMOLVM_AGENT_ROOTFS=/var/lib/smolvm/agent-rootfs")
+	require.Contains(t, out, "Environment=SMOLVM_LIB_DIR=/var/lib/smolvm/lib")
+	require.NotContains(t, out, smolvmConfigBeginMarker)
+}
+
+func TestSmolvmRuntimeArtifacts(t *testing.T) {
+	require.Contains(t, smolvmRuntimeArtifacts, "lib")
+	require.Contains(t, smolvmRuntimeArtifacts, "agent-rootfs")
+
+	// The shim only counts as installed once these are in the copied tree.
+	require.Contains(t, smolvmRuntimeLibraries, "libkrun.so")
+	require.Contains(t, smolvmRuntimeLibraries, "libkrunfw.so")
+}
+
 func TestSmolvmInstalled(t *testing.T) {
 	require.False(t, smolvmDistInstalled())
 	require.False(t, smolvmShimInstalled())

@@ -75,6 +75,17 @@ func RunCmdCapture(name string, args ...string) error {
 	return nil
 }
 
+// runCmdOutput runs a command and returns its combined output. It does not
+// escalate privileges: it is for read-only queries whose output is the point,
+// where a sudo prompt would be in the way.
+func runCmdOutput(name string, args ...string) (string, error) {
+	out, err := exec.Command(name, args...).CombinedOutput()
+	if err != nil {
+		return string(out), fmt.Errorf("%s: %w, output: %s", name, err, string(out))
+	}
+	return string(out), nil
+}
+
 func writeFileAsRoot(path string, data []byte, perm os.FileMode) error {
 	cmd := exec.Command(sudoArgs("tee")[0], append(sudoArgs("tee")[1:], path)...)
 	cmd.Stdin = bytes.NewReader(data)

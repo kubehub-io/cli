@@ -51,13 +51,21 @@ const (
 
 	SmolvmShimBinaryPath = "/usr/local/bin/containerd-shim-smolvm-v2"
 
-	// SmolvmDataDir is where install-k8s-runtime.sh lays down the artifacts the
-	// shim loads at runtime.
+	// SmolvmDataDir is where the runtime artifacts are copied out of the
+	// distribution to, see installSmolvmShim.
 	SmolvmDataDir = "/var/lib/smolvm"
 
 	SmolvmRuntimeHandler = "smolvm"
 	SmolvmRuntimeType    = "io.containerd.smolvm.v2"
 	SmolvmSandboxer      = "podsandbox"
+
+	// smolvmDropInPath is the systemd drop-in that points containerd at the
+	// runtime artifacts. containerd execs the shim, so the shim inherits the
+	// environment this sets. /etc is where an admin override belongs and is
+	// read whichever directory containerd.service itself was installed in:
+	// systemd searches the .d directories across the whole unit load path, and
+	// /etc/systemd/system outranks /run and /usr/lib in it.
+	smolvmDropInPath = "/etc/systemd/system/containerd.service.d/smolvm.conf"
 
 	// containerd CRI plugin names differ between containerd 1.x and 2.x.
 	containerdCRICPluginV1 = "io.containerd.grpc.v1.cri"
