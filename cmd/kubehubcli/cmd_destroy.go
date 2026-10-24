@@ -120,6 +120,7 @@ This is a destructive operation that will:
 				OIDCClientID:  cfg.ClientID,
 				Token:         cfg.Token,
 				Verbose:       verbose,
+				DeviceMode:    deviceMode,
 			}
 			if err := kubehubcli.ResetNode(resetOpts); err != nil {
 				errorExit("reset node: %v", err)

@@ -110,6 +110,7 @@ type JoinOptions struct {
 	ServerURL     string
 	WaitMessage   string
 	Verbose       bool
+	DeviceMode    bool
 	InstallGvisor bool
 	Labels        map[string]string
 	Annotations   map[string]string
@@ -120,7 +121,7 @@ func JoinCluster(opts *JoinOptions) error {
 
 	token := opts.Token
 	if token == "" {
-		auth := NewAuthenticator(opts.OIDCIssuerURL, opts.OIDCClientID).WithVerbose(opts.Verbose)
+		auth := NewAuthenticator(opts.OIDCIssuerURL, opts.OIDCClientID).WithVerbose(opts.Verbose).WithDeviceMode(opts.DeviceMode)
 		var err error
 		token, err = auth.Authenticate(ctx)
 		if err != nil {
@@ -162,7 +163,7 @@ func JoinCluster(opts *JoinOptions) error {
 func JoinClusterWithCluster(opts *JoinOptions, clusterInfo *v202607.Cluster) error {
 	token := opts.Token
 	if token == "" {
-		auth := NewAuthenticator(opts.OIDCIssuerURL, opts.OIDCClientID).WithVerbose(opts.Verbose)
+		auth := NewAuthenticator(opts.OIDCIssuerURL, opts.OIDCClientID).WithVerbose(opts.Verbose).WithDeviceMode(opts.DeviceMode)
 		var err error
 		token, err = auth.Authenticate(context.Background())
 		if err != nil {
@@ -418,6 +419,10 @@ func joinNodeToCluster(client *v202607.Client, authHeader v202607.RequestEditorF
 
 	if err := ensureContainerd(); err != nil {
 		return fmt.Errorf("ensure containerd: %w", err)
+	}
+
+	if err := ensureCNIBinDir(); err != nil {
+		return fmt.Errorf("create CNI bin directory: %w", err)
 	}
 
 	if err := installKubelet(componentVersion, opts.Verbose); err != nil {
@@ -768,6 +773,10 @@ func installIscsiadm() error {
 
 	slog.Info(fmt.Sprintf("Detected package manager: %s", mgr.Name()))
 
+	if err := refreshPackageIndex(context.Background(), mgr); err != nil {
+		return err
+	}
+
 	pkgName := "open-iscsi"
 	switch mgr.Name() {
 	case "dnf", "yum", "rpm":
@@ -780,6 +789,50 @@ func installIscsiadm() error {
 
 	slog.Info("iscsiadm installed successfully")
 	return nil
+}
+
+// refreshPackageIndex updates the package manager's index before installing
+// packages. snack's Update does not accept options (and therefore cannot run
+// with sudo), so fall back to the manager's native command when it fails.
+func refreshPackageIndex(ctx context.Context, mgr snack.Manager) error {
+	slog.Info(fmt.Sprintf("--- Refreshing %s package index ---", mgr.Name()))
+
+	if err := mgr.Update(ctx); err == nil {
+		return nil
+	} else {
+		slog.Warn(fmt.Sprintf("warning: %s package index update failed: %v, trying fallback", mgr.Name(), err))
+	}
+
+	var name string
+	var args []string
+	switch mgr.Name() {
+	case "apt":
+		name, args = "apt-get", []string{"update"}
+	case "dnf", "yum":
+		name, args = mgr.Name(), []string{"makecache"}
+	case "apk":
+		name, args = "apk", []string{"update"}
+	case "pacman":
+		name, args = "pacman", []string{"-Sy", "--noconfirm"}
+	default:
+		return fmt.Errorf("refresh %s package index: unsupported package manager", mgr.Name())
+	}
+
+	if err := RunCmdCapture(name, args...); err != nil {
+		return fmt.Errorf("refresh %s package index: %w", mgr.Name(), err)
+	}
+	return nil
+}
+
+func ensureCNIBinDir() error {
+	if _, err := os.Stat(CNIBinPath); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+
+	slog.Info(fmt.Sprintf("--- Creating %s ---", CNIBinPath))
+	return RunCmd("mkdir", "-p", CNIBinPath)
 }
 
 func installRunc() error {

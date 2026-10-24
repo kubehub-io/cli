@@ -9,6 +9,7 @@ import (
 
 var verbose bool
 var autoYes bool
+var deviceMode bool
 var tokenValue string
 
 func main() {
@@ -27,6 +28,7 @@ func main() {
 	}
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "verbose output")
 	rootCmd.PersistentFlags().BoolVarP(&autoYes, "yes", "y", false, "skip all confirmation prompts")
+	rootCmd.PersistentFlags().BoolVar(&deviceMode, "device-mode", false, "force OAuth2 device authorization flow instead of opening a browser")
 	rootCmd.PersistentFlags().StringVar(&tokenValue, "token", "", "Pass a bearer token directly (skips OAuth2 authentication)")
 	rootCmd.AddCommand(setupCmd(cfg))
 	rootCmd.AddCommand(resetCmd(cfg))

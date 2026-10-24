@@ -93,6 +93,13 @@ func checkRandomMAC(iface string, osConfig OSConfigurator, result *PreflightResu
 
 	slog.Warn(fmt.Sprintf("  [!] Interface %s uses a random MAC address", iface))
 	slog.Warn("      Random MACs can change on reboot and break static IP binding.")
+
+	if !osConfig.CanDisableRandomMAC() {
+		slog.Warn("      [SKIP] Automatic fix unavailable: NetworkManager was not detected.")
+		slog.Warn("      Disable random MAC manually for stability.")
+		return nil
+	}
+
 	slog.Warn("      Recommendation: disable random MAC for stability.")
 
 	PromptConfirm("      Disable random MAC for %s?", iface)
@@ -108,6 +115,14 @@ func checkStaticIP(iface string, info *HostInfo, osConfig OSConfigurator, result
 	ip := info.HostIPs[0]
 	if net.ParseIP(ip) == nil {
 		return fmt.Errorf("invalid IP: %s", ip)
+	}
+
+	if iface != "" && !osConfig.CanConfigureStaticIP(iface) {
+		slog.Warn(fmt.Sprintf("  [!] This node uses DHCP (dynamic IP: %s)", ip))
+		slog.Warn("      Static IP is required for Kubernetes nodes.")
+		slog.Warn(fmt.Sprintf("      [SKIP] Automatic static IP configuration is unavailable for %s (nmcli not detected).", iface))
+		slog.Warn("      Configure a static IP manually.")
+		return nil
 	}
 
 	mac := ""

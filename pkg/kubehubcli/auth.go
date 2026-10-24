@@ -23,12 +23,13 @@ import (
 )
 
 type Authenticator struct {
-	IssuerURL string
-	ClientID  string
-	Scopes    []string
-	tokenFile string
-	forceAuth bool
-	Verbose   bool
+	IssuerURL  string
+	ClientID   string
+	Scopes     []string
+	tokenFile  string
+	forceAuth  bool
+	deviceMode bool
+	Verbose    bool
 }
 
 func NewAuthenticator(issuerURL, clientID string) *Authenticator {
@@ -61,6 +62,14 @@ func (a *Authenticator) WithForceAuth(force bool) *Authenticator {
 	return a
 }
 
+// WithDeviceMode forces the OAuth2 device authorization flow even when a
+// browser is available. This is useful on headless or remote hosts where
+// opening a local browser is not possible.
+func (a *Authenticator) WithDeviceMode(deviceMode bool) *Authenticator {
+	a.deviceMode = deviceMode
+	return a
+}
+
 func (a *Authenticator) Authenticate(ctx context.Context) (string, error) {
 	if a.Verbose {
 		slog.Info(fmt.Sprintf("Authenticator: issuer=%s client-id=%s token-file=%s", a.IssuerURL, a.ClientID, a.tokenFile))
@@ -90,10 +99,10 @@ func (a *Authenticator) Authenticate(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("detect browser: %w", err)
 	}
 	if a.Verbose {
-		slog.Info(fmt.Sprintf("Authenticator: browser detected=%v os=%s", hasBrowser, runtime.GOOS))
+		slog.Info(fmt.Sprintf("Authenticator: browser detected=%v os=%s device-mode=%v", hasBrowser, runtime.GOOS, a.deviceMode))
 	}
 
-	if hasBrowser && runtime.GOOS != "windows" && runtime.GOOS != "darwin" {
+	if !a.deviceMode && hasBrowser && runtime.GOOS != "windows" && runtime.GOOS != "darwin" {
 		return a.webAuth(ctx)
 	}
 	return a.deviceAuth(ctx)

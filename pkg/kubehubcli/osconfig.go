@@ -3,6 +3,7 @@ package kubehubcli
 import (
 	"fmt"
 	"net"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -13,7 +14,9 @@ type OSConfigurator interface {
 	ResolvConfPath() string
 	DataRoot() string
 	ConfigureStaticIP(iface, ip, gateway string, dnsServers []string) error
+	CanConfigureStaticIP(iface string) bool
 	DisableRandomMAC(iface string) error
+	CanDisableRandomMAC() bool
 }
 
 func DetectOSConfigurator(distro string) OSConfigurator {
@@ -42,6 +45,16 @@ func (u *ubuntuConfigurator) DataRoot() string {
 }
 
 func (u *ubuntuConfigurator) ConfigureStaticIP(iface, ip, gateway string, dnsServers []string) error {
+	if isWirelessInterface(iface) {
+		if !hasCommand("nmcli") {
+			return fmt.Errorf("wireless interface %s requires NetworkManager (nmcli) for static IP configuration", iface)
+		}
+		// A previous run may have written an ethernet definition for this
+		// wireless device, which netplan rejects as a device type change.
+		_ = RunCmdCapture("rm", "-f", "/etc/netplan/99-kubehub-static.yaml")
+		return configureStaticIPWithNetworkManager(iface, ip, gateway, dnsServers)
+	}
+
 	netplanDir := "/etc/netplan"
 
 	prefix := detectPrefix(iface, ip)
@@ -77,6 +90,13 @@ func (u *ubuntuConfigurator) ConfigureStaticIP(iface, ip, gateway string, dnsSer
 	return nil
 }
 
+func (u *ubuntuConfigurator) CanConfigureStaticIP(iface string) bool {
+	if isWirelessInterface(iface) {
+		return hasCommand("nmcli")
+	}
+	return true
+}
+
 func (u *ubuntuConfigurator) DisableRandomMAC(iface string) error {
 	nmDir := "/etc/NetworkManager/conf.d"
 	cfg := fmt.Sprintf(`[connection]
@@ -91,6 +111,9 @@ wifi.cloned-mac-address=permanent
 `, iface)
 	}
 
+	if err := RunCmdCapture("mkdir", "-p", nmDir); err != nil {
+		return fmt.Errorf("create NetworkManager config directory: %w", err)
+	}
 	if err := writeFileAsRoot(filepath.Join(nmDir, "99-kubehub-disable-random-mac.conf"), []byte(cfg), 0644); err != nil {
 		return fmt.Errorf("write NetworkManager config: %w", err)
 	}
@@ -98,6 +121,10 @@ wifi.cloned-mac-address=permanent
 		return fmt.Errorf("reload NetworkManager: %w", err)
 	}
 	return nil
+}
+
+func (u *ubuntuConfigurator) CanDisableRandomMAC() bool {
+	return networkManagerAvailable()
 }
 
 type debianConfigurator struct{}
@@ -131,6 +158,13 @@ func srvHasSpace() bool {
 }
 
 func (d *debianConfigurator) ConfigureStaticIP(iface, ip, gateway string, dnsServers []string) error {
+	if isWirelessInterface(iface) {
+		if !hasCommand("nmcli") {
+			return fmt.Errorf("wireless interface %s requires NetworkManager (nmcli) for static IP configuration", iface)
+		}
+		return configureStaticIPWithNetworkManager(iface, ip, gateway, dnsServers)
+	}
+
 	prefix := detectPrefix(iface, ip)
 	m := net.CIDRMask(prefix, 32)
 	netmask := fmt.Sprintf("%d.%d.%d.%d", m[0], m[1], m[2], m[3])
@@ -159,9 +193,19 @@ iface %s inet static
 	return nil
 }
 
+func (d *debianConfigurator) CanConfigureStaticIP(iface string) bool {
+	u := &ubuntuConfigurator{}
+	return u.CanConfigureStaticIP(iface)
+}
+
 func (d *debianConfigurator) DisableRandomMAC(iface string) error {
 	u := &ubuntuConfigurator{}
 	return u.DisableRandomMAC(iface)
+}
+
+func (d *debianConfigurator) CanDisableRandomMAC() bool {
+	u := &ubuntuConfigurator{}
+	return u.CanDisableRandomMAC()
 }
 
 type fedoraConfigurator struct{}
@@ -185,22 +229,54 @@ func (f *fedoraConfigurator) ConfigureStaticIP(iface, ip, gateway string, dnsSer
 	}
 	dnsServers = filteredDNS
 
-	if _, err := exec.LookPath("nmcli"); err == nil {
-		prefix := detectPrefix(iface, ip)
-		nmArgs := []string{
-			"nmcli", "connection", "modify", iface,
+	return configureStaticIPWithNetworkManager(iface, ip, gateway, dnsServers)
+}
+
+func (f *fedoraConfigurator) CanConfigureStaticIP(iface string) bool {
+	u := &ubuntuConfigurator{}
+	return u.CanConfigureStaticIP(iface)
+}
+
+func (f *fedoraConfigurator) DisableRandomMAC(iface string) error {
+	u := &ubuntuConfigurator{}
+	return u.DisableRandomMAC(iface)
+}
+
+func (f *fedoraConfigurator) CanDisableRandomMAC() bool {
+	u := &ubuntuConfigurator{}
+	return u.CanDisableRandomMAC()
+}
+
+// configureStaticIPWithNetworkManager applies a static IPv4 address to an
+// existing NetworkManager connection. This preserves the credentials of an
+// already-configured Wi-Fi connection, which netplan cannot do without the
+// access point passphrase.
+func configureStaticIPWithNetworkManager(iface, ip, gateway string, dnsServers []string) error {
+	prefix := detectPrefix(iface, ip)
+
+	if hasCommand("nmcli") {
+		conn := iface
+		if out, err := exec.Command("nmcli", "-g", "GENERAL.CONNECTION", "device", "show", iface).Output(); err == nil {
+			if name := strings.TrimSpace(string(out)); name != "" && name != "--" {
+				conn = name
+			}
+		}
+		if err := RunCmdCapture("nmcli", "connection", "modify", conn,
 			"ipv4.addresses", fmt.Sprintf("%s/%d", ip, prefix),
 			"ipv4.gateway", gateway,
-		}
-		nmArgs = append(nmArgs, "ipv4.dns", strings.Join(dnsServers, " "))
-		nmArgs = append(nmArgs, "ipv4.method", "manual")
-		if err := RunCmdCapture(nmArgs[0], nmArgs[1:]...); err != nil {
+			"ipv4.dns", strings.Join(dnsServers, " "),
+			"ipv4.method", "manual",
+		); err != nil {
 			return fmt.Errorf("nmcli: %w", err)
 		}
-		if err := RunCmdCapture("nmcli", "connection", "up", iface); err != nil {
+		if err := RunCmdCapture("nmcli", "connection", "up", conn); err != nil {
 			return fmt.Errorf("nmcli: %w", err)
 		}
 		return nil
+	}
+
+	if isWirelessInterface(iface) {
+		return fmt.Errorf("wireless interface %s requires nmcli for static IP configuration", iface)
 	}
 
 	cfg := fmt.Sprintf(`[connection]
@@ -214,7 +290,7 @@ method=manual
 addresses=%s/%d
 gateway=%s
 dns=%s
-`, iface, iface, ip, detectPrefix(iface, ip), gateway, strings.Join(dnsServers, ";"))
+`, iface, iface, ip, prefix, gateway, strings.Join(dnsServers, ";"))
 
 	nmDir := "/etc/NetworkManager/system-connections"
 	if err := RunCmdCapture("mkdir", "-p", nmDir); err != nil {
@@ -229,9 +305,29 @@ dns=%s
 	return nil
 }
 
-func (f *fedoraConfigurator) DisableRandomMAC(iface string) error {
-	u := &ubuntuConfigurator{}
-	return u.DisableRandomMAC(iface)
+func hasCommand(name string) bool {
+	_, err := exec.LookPath(name)
+	return err == nil
+}
+
+func networkManagerAvailable() bool {
+	if hasCommand("nmcli") || hasCommand("NetworkManager") {
+		return true
+	}
+	_, err := os.Stat("/etc/NetworkManager")
+	return err == nil
+}
+
+func isWirelessInterface(iface string) bool {
+	if iface == "" {
+		return false
+	}
+	for _, name := range []string{"wireless", "phy80211"} {
+		if _, err := os.Stat(filepath.Join("/sys/class/net", iface, name)); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 func defaultRouteInterface() (string, error) {
