@@ -185,7 +185,9 @@ func newJoinPlan(info *HostInfo, opts *JoinOptions, preflight *PreflightResult, 
 	}
 
 	if !hasCommand("iscsiadm") {
-		plan.Software = append(plan.Software, JoinPlanItem{Summary: "iSCSI utilities (iscsiadm)"})
+		plan.Software = append(plan.Software, JoinPlanItem{Summary: "iSCSI utilities (iscsiadm)", Description: "iscsiadm not detected on this host"})
+	} else {
+		plan.Software = append(plan.Software, JoinPlanItem{Summary: "iscsiadm already installed", Description: "No update needed"})
 	}
 
 	kubeSummary := "kubelet and kubectl"
