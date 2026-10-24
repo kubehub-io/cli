@@ -42,17 +42,35 @@ var execSysctl = func(args ...string) error {
 	return RunCmdCapture(args[0], args[1:]...)
 }
 
+// execModprobe loads kernel modules. It delegates to execSysctl so callers
+// (and tests) can mock it the same way sysctl is mocked.
+var execModprobe = func(args ...string) error {
+	return execSysctl(args...)
+}
+
 // reloadSysctl applies sysctl settings. procps sysctl supports --system,
 // BusyBox (Alpine) only supports -p <file>.
 func reloadSysctl(files ...string) error {
 	if err := execSysctl("sysctl", "--system"); err == nil {
+		if err := execModprobe("modprobe", "br_netfilter"); err != nil {
+			slog.Error("modprobe br_netfilter failed", "error", err)
+		}
 		return nil
 	}
 	if len(files) == 0 {
+		if err := execModprobe("modprobe", "br_netfilter"); err != nil {
+			slog.Error("modprobe br_netfilter failed", "error", err)
+		}
 		return nil
 	}
 	args := append([]string{"sysctl", "-p"}, files...)
-	return execSysctl(args...)
+	if err := execSysctl(args...); err != nil {
+		return err
+	}
+	if err := execModprobe("modprobe", "br_netfilter"); err != nil {
+		slog.Error("modprobe br_netfilter failed", "error", err)
+	}
+	return nil
 }
 
 func RunCmd(name string, args ...string) error {
