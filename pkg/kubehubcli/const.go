@@ -6,6 +6,7 @@ const (
 	CrictlVersion         = "v1.33.0"
 	ClusterDomain         = "cluster.local"
 	StaticPodPath         = "/etc/kubernetes/manifests"
+	CNIBinPath            = "/opt/cni/bin"
 	KubeletConfigPath     = "/var/lib/kubelet/config.yaml"
 	KubeletKubeconfigPath = "/var/lib/kubelet/kubeconfig"
 	PKIPath               = "/etc/kubernetes/pki"

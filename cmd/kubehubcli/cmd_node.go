@@ -48,6 +48,7 @@ func nodeJoinCmd(cfg *kubehubcli.Config) *cobra.Command {
 				Token:         cfg.Token,
 				WaitMessage:   "Waiting for node registration",
 				Verbose:       verbose,
+				DeviceMode:    deviceMode,
 				InstallGvisor: installGvisor,
 				Labels:        getMapFlag(cmd, "label"),
 				Annotations:   getMapFlag(cmd, "annotation"),

@@ -61,6 +61,7 @@ func TestReloadSysctlBusyBoxFallback(t *testing.T) {
 	require.Equal(t, [][]string{
 		{"sysctl", "--system"},
 		{"sysctl", "-p", "/etc/sysctl.d/98-kubernetes.conf"},
+		{"modprobe", "br_netfilter"},
 	}, calls)
 }
 
@@ -75,7 +76,10 @@ func TestReloadSysctlProcps(t *testing.T) {
 	}
 
 	require.NoError(t, reloadSysctl("/etc/sysctl.d/98-kubernetes.conf"))
-	require.Equal(t, [][]string{{"sysctl", "--system"}}, calls)
+	require.Equal(t, [][]string{
+		{"sysctl", "--system"},
+		{"modprobe", "br_netfilter"},
+	}, calls)
 }
 
 func TestReloadSysctlBusyBoxNoFiles(t *testing.T) {
@@ -83,7 +87,10 @@ func TestReloadSysctlBusyBoxNoFiles(t *testing.T) {
 	t.Cleanup(func() { execSysctl = orig })
 
 	execSysctl = func(args ...string) error {
-		return fmt.Errorf("sysctl: unrecognized option: system")
+		if args[1] == "--system" {
+			return fmt.Errorf("sysctl: unrecognized option: system")
+		}
+		return nil
 	}
 
 	require.NoError(t, reloadSysctl())

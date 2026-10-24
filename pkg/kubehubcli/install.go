@@ -1,7 +1,6 @@
 package kubehubcli
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/base64"
@@ -43,17 +42,35 @@ var execSysctl = func(args ...string) error {
 	return RunCmdCapture(args[0], args[1:]...)
 }
 
+// execModprobe loads kernel modules. It delegates to execSysctl so callers
+// (and tests) can mock it the same way sysctl is mocked.
+var execModprobe = func(args ...string) error {
+	return execSysctl(args...)
+}
+
 // reloadSysctl applies sysctl settings. procps sysctl supports --system,
 // BusyBox (Alpine) only supports -p <file>.
 func reloadSysctl(files ...string) error {
 	if err := execSysctl("sysctl", "--system"); err == nil {
+		if err := execModprobe("modprobe", "br_netfilter"); err != nil {
+			slog.Error("modprobe br_netfilter failed", "error", err)
+		}
 		return nil
 	}
 	if len(files) == 0 {
+		if err := execModprobe("modprobe", "br_netfilter"); err != nil {
+			slog.Error("modprobe br_netfilter failed", "error", err)
+		}
 		return nil
 	}
 	args := append([]string{"sysctl", "-p"}, files...)
-	return execSysctl(args...)
+	if err := execSysctl(args...); err != nil {
+		return err
+	}
+	if err := execModprobe("modprobe", "br_netfilter"); err != nil {
+		slog.Error("modprobe br_netfilter failed", "error", err)
+	}
+	return nil
 }
 
 func RunCmd(name string, args ...string) error {
@@ -110,6 +127,7 @@ type JoinOptions struct {
 	ServerURL     string
 	WaitMessage   string
 	Verbose       bool
+	DeviceMode    bool
 	InstallGvisor bool
 	Labels        map[string]string
 	Annotations   map[string]string
@@ -120,7 +138,7 @@ func JoinCluster(opts *JoinOptions) error {
 
 	token := opts.Token
 	if token == "" {
-		auth := NewAuthenticator(opts.OIDCIssuerURL, opts.OIDCClientID).WithVerbose(opts.Verbose)
+		auth := NewAuthenticator(opts.OIDCIssuerURL, opts.OIDCClientID).WithVerbose(opts.Verbose).WithDeviceMode(opts.DeviceMode)
 		var err error
 		token, err = auth.Authenticate(ctx)
 		if err != nil {
@@ -162,7 +180,7 @@ func JoinCluster(opts *JoinOptions) error {
 func JoinClusterWithCluster(opts *JoinOptions, clusterInfo *v202607.Cluster) error {
 	token := opts.Token
 	if token == "" {
-		auth := NewAuthenticator(opts.OIDCIssuerURL, opts.OIDCClientID).WithVerbose(opts.Verbose)
+		auth := NewAuthenticator(opts.OIDCIssuerURL, opts.OIDCClientID).WithVerbose(opts.Verbose).WithDeviceMode(opts.DeviceMode)
 		var err error
 		token, err = auth.Authenticate(context.Background())
 		if err != nil {
@@ -224,6 +242,16 @@ func joinNodeToCluster(client *v202607.Client, authHeader v202607.RequestEditorF
 		slog.Info("IP validated successfully")
 	} else if len(info.HostIPs) > 0 {
 		nodeIP = info.HostIPs[0]
+	}
+
+	laptop := isLaptop()
+	componentVersion := resolveClusterComponentVersion(clusterInfo)
+	plan := newJoinPlan(info, opts, preflight, laptop, clusterInfo, componentVersion)
+	if err := confirmJoinPlan(plan); err != nil {
+		return err
+	}
+	if preflight != nil {
+		preflight.applyNetworkSetup()
 	}
 
 	getResp, err := client.GetNode(ctx, opts.ClusterName, hostname, authHeader)
@@ -336,7 +364,7 @@ func joinNodeToCluster(client *v202607.Client, authHeader v202607.RequestEditorF
 
 	podCIDR, serviceCIDR, kubeDNSDefaultIP := resolveClusterCIDRs(clusterInfo)
 
-	componentVersion := resolveClusterComponentVersion(clusterInfo)
+	componentVersion = resolveClusterComponentVersion(clusterInfo)
 	controllerImage := fmt.Sprintf("registry.k8s.io/kube-controller-manager:%s", componentVersion)
 	schedulerImage := fmt.Sprintf("registry.k8s.io/kube-scheduler:%s", componentVersion)
 
@@ -348,17 +376,9 @@ func joinNodeToCluster(client *v202607.Client, authHeader v202607.RequestEditorF
 		return fmt.Errorf("store certs: %w", err)
 	}
 
-	if isLaptop() {
-		PromptConfirm("Configure lid switch to keep node running when lid is closed?")
+	if laptop {
 		if err := configureLogind(); err != nil {
 			return fmt.Errorf("configure logind: %w", err)
-		}
-	}
-
-	if !AutoAccept() {
-		fmt.Print("Installing kubernetes node requires some system config tweaks, press Enter to proceed: ")
-		if _, err := bufio.NewReader(os.Stdin).ReadString('\n'); err != nil {
-			return fmt.Errorf("read confirmation: %w", err)
 		}
 	}
 
@@ -418,6 +438,10 @@ func joinNodeToCluster(client *v202607.Client, authHeader v202607.RequestEditorF
 
 	if err := ensureContainerd(); err != nil {
 		return fmt.Errorf("ensure containerd: %w", err)
+	}
+
+	if err := ensureCNIBinDir(); err != nil {
+		return fmt.Errorf("create CNI bin directory: %w", err)
 	}
 
 	if err := installKubelet(componentVersion, opts.Verbose); err != nil {
@@ -768,6 +792,10 @@ func installIscsiadm() error {
 
 	slog.Info(fmt.Sprintf("Detected package manager: %s", mgr.Name()))
 
+	if err := refreshPackageIndex(context.Background(), mgr); err != nil {
+		return err
+	}
+
 	pkgName := "open-iscsi"
 	switch mgr.Name() {
 	case "dnf", "yum", "rpm":
@@ -780,6 +808,50 @@ func installIscsiadm() error {
 
 	slog.Info("iscsiadm installed successfully")
 	return nil
+}
+
+// refreshPackageIndex updates the package manager's index before installing
+// packages. snack's Update does not accept options (and therefore cannot run
+// with sudo), so fall back to the manager's native command when it fails.
+func refreshPackageIndex(ctx context.Context, mgr snack.Manager) error {
+	slog.Info(fmt.Sprintf("--- Refreshing %s package index ---", mgr.Name()))
+
+	if err := mgr.Update(ctx); err == nil {
+		return nil
+	} else {
+		slog.Warn(fmt.Sprintf("warning: %s package index update failed: %v, trying fallback", mgr.Name(), err))
+	}
+
+	var name string
+	var args []string
+	switch mgr.Name() {
+	case "apt":
+		name, args = "apt-get", []string{"update"}
+	case "dnf", "yum":
+		name, args = mgr.Name(), []string{"makecache"}
+	case "apk":
+		name, args = "apk", []string{"update"}
+	case "pacman":
+		name, args = "pacman", []string{"-Sy", "--noconfirm"}
+	default:
+		return fmt.Errorf("refresh %s package index: unsupported package manager", mgr.Name())
+	}
+
+	if err := RunCmdCapture(name, args...); err != nil {
+		return fmt.Errorf("refresh %s package index: %w", mgr.Name(), err)
+	}
+	return nil
+}
+
+func ensureCNIBinDir() error {
+	if _, err := os.Stat(CNIBinPath); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+
+	slog.Info(fmt.Sprintf("--- Creating %s ---", CNIBinPath))
+	return RunCmd("mkdir", "-p", CNIBinPath)
 }
 
 func installRunc() error {
@@ -905,29 +977,44 @@ func installContainerd() error {
 	return nil
 }
 
-func configureContainerd(info *HostInfo) error {
+func configureContainerd(info *HostInfo, configPaths ...string) error {
+	configPath := ContainerdConfigPath
+	if len(configPaths) > 0 && configPaths[0] != "" {
+		configPath = configPaths[0]
+	}
+
 	slog.Info("--- Configuring containerd ---")
 
-	osConfig := DetectOSConfigurator(info.Distro)
-	dataRoot := osConfig.DataRoot()
-	containerdRoot := dataRoot + "/containerd"
+	if info != nil {
+		osConfig := DetectOSConfigurator(info.Distro)
+		dataRoot := osConfig.DataRoot()
+		containerdRoot := dataRoot + "/containerd"
 
-	if containerdRoot != "/var/lib/containerd" {
-		if err := RunCmd("mkdir", "-p", containerdRoot); err != nil {
-			return fmt.Errorf("create containerd root: %w", err)
+		if containerdRoot != "/var/lib/containerd" {
+			if err := RunCmd("mkdir", "-p", containerdRoot); err != nil {
+				return fmt.Errorf("create containerd root: %w", err)
+			}
+			pattern := fmt.Sprintf(`s|root = "/var/lib/containerd"|root = %q|`, containerdRoot)
+			if err := RunCmdCapture("sed", "-i", pattern, configPath); err != nil {
+				return fmt.Errorf("set containerd root: %w", err)
+			}
+			slog.Info(fmt.Sprintf("containerd root set to %s", containerdRoot))
 		}
-		pattern := fmt.Sprintf(`s|root = "/var/lib/containerd"|root = %q|`, containerdRoot)
-		if err := RunCmdCapture("sed", "-i", pattern, ContainerdConfigPath); err != nil {
-			return fmt.Errorf("set containerd root: %w", err)
-		}
-		slog.Info(fmt.Sprintf("containerd root set to %s", containerdRoot))
 	}
 
 	if IsSystemdManaged() {
-		if err := RunCmdCapture("sed", "-i", "s/SystemdCgroup = false/SystemdCgroup = true/", ContainerdConfigPath); err != nil {
+		if err := RunCmdCapture("sed", "-i", "s/SystemdCgroup = false/SystemdCgroup = true/", configPath); err != nil {
 			return fmt.Errorf("set SystemdCgroup: %w", err)
 		}
 		slog.Info("systemd detected, SystemdCgroup set to true")
+	}
+
+	// Some pre-installed containerd configs (e.g. those shipped with Docker)
+	// disable the CRI plugin. Remove that disable so kubelet can use containerd.
+	if err := removeDisabledCRIPluginPath(configPath); err != nil {
+		slog.Warn(fmt.Sprintf("warning: could not remove disabled CRI plugin from containerd config: %v", err))
+	} else {
+		slog.Info("CRI plugin enabled in containerd config")
 	}
 
 	return nil

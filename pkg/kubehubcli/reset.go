@@ -17,6 +17,7 @@ type ResetOptions struct {
 	OIDCClientID  string
 	Token         string
 	Verbose       bool
+	DeviceMode    bool
 }
 
 func ResetNode(opts *ResetOptions) error {
@@ -72,7 +73,7 @@ func ResetNode(opts *ResetOptions) error {
 		ctx := context.Background()
 		token := opts.Token
 		if token == "" {
-			auth := NewAuthenticator(opts.OIDCIssuerURL, opts.OIDCClientID).WithVerbose(opts.Verbose)
+			auth := NewAuthenticator(opts.OIDCIssuerURL, opts.OIDCClientID).WithVerbose(opts.Verbose).WithDeviceMode(opts.DeviceMode)
 			var err error
 			token, err = auth.Authenticate(ctx)
 			if err != nil {
