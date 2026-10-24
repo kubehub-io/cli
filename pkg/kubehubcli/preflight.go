@@ -15,6 +15,8 @@ type PreflightResult struct {
 	StaticIPConfigured bool
 	MACFixed           bool
 	ClusterUpdated     bool
+	NetworkPlan        []JoinPlanItem
+	applyNetwork       []func() error
 }
 
 func RunPreflightChecks(ctx context.Context, client *v202607.Client, authHeader v202607.RequestEditorFn, opts *JoinOptions, clusterInfo *v202607.Cluster, info *HostInfo) (*PreflightResult, error) {
@@ -30,7 +32,7 @@ func RunPreflightChecks(ctx context.Context, client *v202607.Client, authHeader 
 	slog.Info("=== Pre-flight Checks ===")
 
 	if iface != "" {
-		if err := checkRandomMAC(iface, osConfig, result); err != nil {
+		if err := planRandomMAC(iface, osConfig, result); err != nil {
 			slog.Warn(fmt.Sprintf("  warning: MAC check: %v", err))
 		}
 	} else {
@@ -38,11 +40,11 @@ func RunPreflightChecks(ctx context.Context, client *v202607.Client, authHeader 
 	}
 
 	if iface != "" {
-		if err := checkStaticIP(iface, info, osConfig, result); err != nil {
+		if err := planStaticIP(iface, info, osConfig, result); err != nil {
 			slog.Warn(fmt.Sprintf("  warning: static IP check: %v", err))
 		}
 	} else if len(info.HostIPs) > 0 {
-		if err := checkStaticIP("", info, osConfig, result); err != nil {
+		if err := planStaticIP("", info, osConfig, result); err != nil {
 			slog.Warn(fmt.Sprintf("  warning: static IP check: %v", err))
 		}
 	} else {
@@ -56,6 +58,14 @@ func RunPreflightChecks(ctx context.Context, client *v202607.Client, authHeader 
 	}
 
 	return result, nil
+}
+
+func (r *PreflightResult) applyNetworkSetup() {
+	for _, apply := range r.applyNetwork {
+		if err := apply(); err != nil {
+			slog.Warn(fmt.Sprintf("warning: network setup: %v", err))
+		}
+	}
 }
 
 func findInterfaceForIP(ipStr string) string {
@@ -85,33 +95,39 @@ func findInterfaceForIP(ipStr string) string {
 	return ""
 }
 
-func checkRandomMAC(iface string, osConfig OSConfigurator, result *PreflightResult) error {
+func planRandomMAC(iface string, osConfig OSConfigurator, result *PreflightResult) error {
 	if !hasRandomMAC(iface) {
 		slog.Info(fmt.Sprintf("  [OK] MAC address is stable on %s", iface))
 		return nil
 	}
 
-	slog.Warn(fmt.Sprintf("  [!] Interface %s uses a random MAC address", iface))
-	slog.Warn("      Random MACs can change on reboot and break static IP binding.")
-
 	if !osConfig.CanDisableRandomMAC() {
+		slog.Warn(fmt.Sprintf("  [!] Interface %s uses a random MAC address", iface))
+		slog.Warn("      Random MACs can change on reboot and break static IP binding.")
 		slog.Warn("      [SKIP] Automatic fix unavailable: NetworkManager was not detected.")
 		slog.Warn("      Disable random MAC manually for stability.")
 		return nil
 	}
 
-	slog.Warn("      Recommendation: disable random MAC for stability.")
-
-	PromptConfirm("      Disable random MAC for %s?", iface)
-	if err := osConfig.DisableRandomMAC(iface); err != nil {
-		return fmt.Errorf("disable random MAC: %w", err)
-	}
-	slog.Info("      Random MAC disabled. Reconnect the interface for changes to take effect.")
-	result.MACFixed = true
+	result.NetworkPlan = append(result.NetworkPlan, JoinPlanItem{
+		Summary:     fmt.Sprintf("Random MAC → permanent MAC on %s", iface),
+		Description: "Random MAC addresses can change after reboot and are not suitable for a server.",
+	})
+	result.applyNetwork = append(result.applyNetwork, func() error {
+		if err := osConfig.DisableRandomMAC(iface); err != nil {
+			return fmt.Errorf("disable random MAC: %w", err)
+		}
+		slog.Info("Random MAC disabled. Reconnect the interface for changes to take effect.")
+		result.MACFixed = true
+		return nil
+	})
 	return nil
 }
 
-func checkStaticIP(iface string, info *HostInfo, osConfig OSConfigurator, result *PreflightResult) error {
+func planStaticIP(iface string, info *HostInfo, osConfig OSConfigurator, result *PreflightResult) error {
+	if len(info.HostIPs) == 0 {
+		return nil
+	}
 	ip := info.HostIPs[0]
 	if net.ParseIP(ip) == nil {
 		return fmt.Errorf("invalid IP: %s", ip)
@@ -124,6 +140,11 @@ func checkStaticIP(iface string, info *HostInfo, osConfig OSConfigurator, result
 		slog.Warn("      Configure a static IP manually.")
 		return nil
 	}
+	if iface == "" {
+		slog.Warn(fmt.Sprintf("  [!] This node uses DHCP (dynamic IP: %s)", ip))
+		slog.Warn("      No interface found for IP; configure a static IP manually.")
+		return nil
+	}
 
 	mac := ""
 	if iface != "" {
@@ -132,35 +153,34 @@ func checkStaticIP(iface string, info *HostInfo, osConfig OSConfigurator, result
 		}
 	}
 
-	slog.Warn(fmt.Sprintf("  [!] This node uses DHCP (dynamic IP: %s)", ip))
-	slog.Warn("      Static IP is required for Kubernetes nodes.")
-
-	PromptConfirm("      Configure this host to keep IP %s as static?", ip)
-	gw, err := defaultGateway()
-	if err != nil {
-		gw = ip[:strings.LastIndex(ip, ".")+1] + "1"
-		slog.Info(fmt.Sprintf("      (using assumed gateway: %s)", gw))
-	}
-
-	dnsServers := readNameservers(DetectResolvConfFile())
-	if len(dnsServers) == 0 {
-		dnsServers = []string{gw}
-	}
-
-	if iface != "" {
+	result.NetworkPlan = append(result.NetworkPlan, JoinPlanItem{
+		Summary:     fmt.Sprintf("Dynamic IP → static IP %s on %s", ip, iface),
+		Description: "DHCP-assigned addresses can change and are not reliable for a server.",
+	})
+	result.applyNetwork = append(result.applyNetwork, func() error {
+		gw, err := defaultGateway()
+		if err != nil {
+			if lastDot := strings.LastIndex(ip, "."); lastDot >= 0 {
+				gw = ip[:lastDot+1] + "1"
+				slog.Info(fmt.Sprintf("Using assumed gateway: %s", gw))
+			} else {
+				return fmt.Errorf("determine gateway: %w", err)
+			}
+		}
+		dnsServers := readNameservers(DetectResolvConfFile())
+		if len(dnsServers) == 0 {
+			dnsServers = []string{gw}
+		}
 		if err := osConfig.ConfigureStaticIP(iface, ip, gw, dnsServers); err != nil {
 			return fmt.Errorf("configure static IP: %w", err)
 		}
-		slog.Info("      Static IP configured. Reboot recommended.")
-	} else {
-		slog.Info("      No interface found for IP, skipping configuration.")
-		slog.Info("      Please configure a static IP manually.")
-	}
-
-	if mac != "" {
-		slog.Info(fmt.Sprintf("      For a more robust setup, reserve %s for MAC %s on your router.", ip, mac))
-	}
-	result.StaticIPConfigured = true
+		slog.Info("Static IP configured. Reboot recommended.")
+		if mac != "" {
+			slog.Info(fmt.Sprintf("For a more robust setup, reserve %s for MAC %s on your router.", ip, mac))
+		}
+		result.StaticIPConfigured = true
+		return nil
+	})
 	return nil
 }
 

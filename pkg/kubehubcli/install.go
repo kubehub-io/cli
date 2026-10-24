@@ -1,7 +1,6 @@
 package kubehubcli
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/base64"
@@ -227,6 +226,15 @@ func joinNodeToCluster(client *v202607.Client, authHeader v202607.RequestEditorF
 		nodeIP = info.HostIPs[0]
 	}
 
+	laptop := isLaptop()
+	plan := newJoinPlan(info, opts, preflight, laptop)
+	if err := confirmJoinPlan(plan); err != nil {
+		return err
+	}
+	if preflight != nil {
+		preflight.applyNetworkSetup()
+	}
+
 	getResp, err := client.GetNode(ctx, opts.ClusterName, hostname, authHeader)
 	if err != nil {
 		return fmt.Errorf("get node: %w", err)
@@ -349,17 +357,9 @@ func joinNodeToCluster(client *v202607.Client, authHeader v202607.RequestEditorF
 		return fmt.Errorf("store certs: %w", err)
 	}
 
-	if isLaptop() {
-		PromptConfirm("Configure lid switch to keep node running when lid is closed?")
+	if laptop {
 		if err := configureLogind(); err != nil {
 			return fmt.Errorf("configure logind: %w", err)
-		}
-	}
-
-	if !AutoAccept() {
-		fmt.Print("Installing kubernetes node requires some system config tweaks, press Enter to proceed: ")
-		if _, err := bufio.NewReader(os.Stdin).ReadString('\n'); err != nil {
-			return fmt.Errorf("read confirmation: %w", err)
 		}
 	}
 
