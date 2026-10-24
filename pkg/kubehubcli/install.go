@@ -227,7 +227,8 @@ func joinNodeToCluster(client *v202607.Client, authHeader v202607.RequestEditorF
 	}
 
 	laptop := isLaptop()
-	plan := newJoinPlan(info, opts, preflight, laptop)
+	componentVersion := resolveClusterComponentVersion(clusterInfo)
+	plan := newJoinPlan(info, opts, preflight, laptop, clusterInfo, componentVersion)
 	if err := confirmJoinPlan(plan); err != nil {
 		return err
 	}
@@ -345,7 +346,7 @@ func joinNodeToCluster(client *v202607.Client, authHeader v202607.RequestEditorF
 
 	podCIDR, serviceCIDR, kubeDNSDefaultIP := resolveClusterCIDRs(clusterInfo)
 
-	componentVersion := resolveClusterComponentVersion(clusterInfo)
+	componentVersion = resolveClusterComponentVersion(clusterInfo)
 	controllerImage := fmt.Sprintf("registry.k8s.io/kube-controller-manager:%s", componentVersion)
 	schedulerImage := fmt.Sprintf("registry.k8s.io/kube-scheduler:%s", componentVersion)
 
@@ -958,29 +959,44 @@ func installContainerd() error {
 	return nil
 }
 
-func configureContainerd(info *HostInfo) error {
+func configureContainerd(info *HostInfo, configPaths ...string) error {
+	configPath := ContainerdConfigPath
+	if len(configPaths) > 0 && configPaths[0] != "" {
+		configPath = configPaths[0]
+	}
+
 	slog.Info("--- Configuring containerd ---")
 
-	osConfig := DetectOSConfigurator(info.Distro)
-	dataRoot := osConfig.DataRoot()
-	containerdRoot := dataRoot + "/containerd"
+	if info != nil {
+		osConfig := DetectOSConfigurator(info.Distro)
+		dataRoot := osConfig.DataRoot()
+		containerdRoot := dataRoot + "/containerd"
 
-	if containerdRoot != "/var/lib/containerd" {
-		if err := RunCmd("mkdir", "-p", containerdRoot); err != nil {
-			return fmt.Errorf("create containerd root: %w", err)
+		if containerdRoot != "/var/lib/containerd" {
+			if err := RunCmd("mkdir", "-p", containerdRoot); err != nil {
+				return fmt.Errorf("create containerd root: %w", err)
+			}
+			pattern := fmt.Sprintf(`s|root = "/var/lib/containerd"|root = %q|`, containerdRoot)
+			if err := RunCmdCapture("sed", "-i", pattern, configPath); err != nil {
+				return fmt.Errorf("set containerd root: %w", err)
+			}
+			slog.Info(fmt.Sprintf("containerd root set to %s", containerdRoot))
 		}
-		pattern := fmt.Sprintf(`s|root = "/var/lib/containerd"|root = %q|`, containerdRoot)
-		if err := RunCmdCapture("sed", "-i", pattern, ContainerdConfigPath); err != nil {
-			return fmt.Errorf("set containerd root: %w", err)
-		}
-		slog.Info(fmt.Sprintf("containerd root set to %s", containerdRoot))
 	}
 
 	if IsSystemdManaged() {
-		if err := RunCmdCapture("sed", "-i", "s/SystemdCgroup = false/SystemdCgroup = true/", ContainerdConfigPath); err != nil {
+		if err := RunCmdCapture("sed", "-i", "s/SystemdCgroup = false/SystemdCgroup = true/", configPath); err != nil {
 			return fmt.Errorf("set SystemdCgroup: %w", err)
 		}
 		slog.Info("systemd detected, SystemdCgroup set to true")
+	}
+
+	// Some pre-installed containerd configs (e.g. those shipped with Docker)
+	// disable the CRI plugin. Remove that disable so kubelet can use containerd.
+	if err := removeDisabledCRIPluginPath(configPath); err != nil {
+		slog.Warn(fmt.Sprintf("warning: could not remove disabled CRI plugin from containerd config: %v", err))
+	} else {
+		slog.Info("CRI plugin enabled in containerd config")
 	}
 
 	return nil

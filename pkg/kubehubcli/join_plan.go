@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"strings"
+
+	v202607 "github.com/kubehub-io/kubehubcli/pkg/clientlib/v202607"
 )
 
 type JoinPlan struct {
@@ -109,7 +112,26 @@ func confirmJoinPlan(plan JoinPlan) error {
 	return nil
 }
 
-func newJoinPlan(info *HostInfo, opts *JoinOptions, preflight *PreflightResult, laptop bool) JoinPlan {
+func newJoinPlan(info *HostInfo, opts *JoinOptions, preflight *PreflightResult, laptop bool, extra ...any) JoinPlan {
+	var clusterInfo *v202607.Cluster
+	componentVersion := ""
+	for _, e := range extra {
+		switch v := e.(type) {
+		case *v202607.Cluster:
+			clusterInfo = v
+			if componentVersion == "" {
+				componentVersion = resolveClusterComponentVersion(v)
+			}
+		case string:
+			if componentVersion == "" {
+				componentVersion = v
+			}
+		}
+	}
+	if clusterInfo != nil && componentVersion == "" {
+		componentVersion = resolveClusterComponentVersion(clusterInfo)
+	}
+
 	plan := JoinPlan{}
 	if preflight != nil {
 		plan.Network = append(plan.Network, preflight.NetworkPlan...)
@@ -131,22 +153,73 @@ func newJoinPlan(info *HostInfo, opts *JoinOptions, preflight *PreflightResult, 
 	if info == nil {
 		return plan
 	}
-	plan.Software = append(plan.Software, JoinPlanItem{
-		Summary:     "Ensure runc is installed and up to date",
-		Description: "Install or update only if the host version is missing or too old",
-	})
+
+	// runc
+	runcSummary := "Install runc " + RuncVersion
+	runcDesc := "runc not detected on this host"
+	if info.Runc != nil {
+		version := runcVersionNumber(info.Runc.Version)
+		if isRuncVersionSufficient(version) {
+			runcSummary = fmt.Sprintf("runc %s already installed (sufficient)", version)
+			runcDesc = "No update needed"
+		} else if version != "" {
+			runcSummary = fmt.Sprintf("Update runc from %s to %s", version, RuncVersion)
+			runcDesc = "Installed version is too old"
+		} else {
+			runcSummary = "Ensure runc is installed and up to date"
+			runcDesc = "Install or update only if the host version is missing or too old"
+		}
+	}
+	plan.Software = append(plan.Software, JoinPlanItem{Summary: runcSummary, Description: runcDesc})
+
+	// containerd
 	if info.Containerd == nil {
 		plan.Software = append(plan.Software, JoinPlanItem{Summary: "containerd " + ContainerdVersion})
+	} else {
+		version := containerdVersionNumber(info.Containerd.Version)
+		if version != "" {
+			plan.Software = append(plan.Software, JoinPlanItem{Summary: "containerd " + version + " already installed"})
+		} else {
+			plan.Software = append(plan.Software, JoinPlanItem{Summary: "containerd already installed"})
+		}
 	}
+
 	if !hasCommand("iscsiadm") {
 		plan.Software = append(plan.Software, JoinPlanItem{Summary: "iSCSI utilities (iscsiadm)"})
 	}
+
+	kubeSummary := "kubelet and kubectl"
+	kubeDesc := "Kubernetes version selected by the cluster"
+	if componentVersion != "" {
+		kubeSummary = fmt.Sprintf("kubelet and kubectl %s", componentVersion)
+	}
 	plan.Software = append(plan.Software,
 		JoinPlanItem{Summary: "crictl " + CrictlVersion},
-		JoinPlanItem{Summary: "kubelet and kubectl", Description: "Kubernetes version selected by the cluster"},
+		JoinPlanItem{Summary: kubeSummary, Description: kubeDesc},
 	)
 	if opts != nil && opts.InstallGvisor {
 		plan.Software = append(plan.Software, JoinPlanItem{Summary: "gVisor runtime (runsc)"})
 	}
 	return plan
+}
+
+func runcVersionNumber(version string) string {
+	re := regexp.MustCompile(`\d+\.\d+(?:\.\d+)?`)
+	if m := re.FindString(version); m != "" {
+		return m
+	}
+	return strings.TrimSpace(version)
+}
+
+func containerdVersionNumber(version string) string {
+	re := regexp.MustCompile(`\bv(\d+\.\d+(?:\.\d+)?)`)
+	m := re.FindStringSubmatch(version)
+	if len(m) >= 2 {
+		return m[1]
+	}
+	re2 := regexp.MustCompile(`\d+\.\d+(?:\.\d+)?`)
+	if m := re2.FindString(version); m != "" {
+		return m
+	}
+	return ""
 }
