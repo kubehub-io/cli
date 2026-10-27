@@ -106,7 +106,7 @@ func TestNodeReconcileSendsETagHeader(t *testing.T) {
 	defer srv.Close()
 
 	cmd := nodeReconcileCmd(&kubehubcli.Config{Server: srv.URL})
-	cmd.SetArgs([]string{"--cluster", "pp2", "--node", "node1"})
+	cmd.SetArgs([]string{"--cluster", "pp2", "--node", "node1", "--disable-gvisor"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +150,7 @@ func nodeReconcileServer(t *testing.T, putCalls *int) *httptest.Server {
 	return srv
 }
 
-func TestNodeReconcileInstallGvisor(t *testing.T) {
+func TestNodeReconcileInstallsGvisorByDefault(t *testing.T) {
 	withTestHome(t)
 	writeCachedToken(t)
 
@@ -160,7 +160,7 @@ func TestNodeReconcileInstallGvisor(t *testing.T) {
 	srv := nodeReconcileServer(t, &putCalls)
 
 	cmd := nodeReconcileCmd(&kubehubcli.Config{Server: srv.URL})
-	cmd.SetArgs([]string{"--cluster", "pp2", "--node", "node1", "--install-gvisor"})
+	cmd.SetArgs([]string{"--cluster", "pp2", "--node", "node1"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +173,7 @@ func TestNodeReconcileInstallGvisor(t *testing.T) {
 	}
 }
 
-func TestNodeReconcileSkipsGvisorByDefault(t *testing.T) {
+func TestNodeReconcileDisableGvisor(t *testing.T) {
 	withTestHome(t)
 	writeCachedToken(t)
 
@@ -183,7 +183,7 @@ func TestNodeReconcileSkipsGvisorByDefault(t *testing.T) {
 	srv := nodeReconcileServer(t, &putCalls)
 
 	cmd := nodeReconcileCmd(&kubehubcli.Config{Server: srv.URL})
-	cmd.SetArgs([]string{"--cluster", "pp2", "--node", "node1"})
+	cmd.SetArgs([]string{"--cluster", "pp2", "--node", "node1", "--disable-gvisor"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}

@@ -22,6 +22,7 @@ func setupCmd(cfg *kubehubcli.Config) *cobra.Command {
 			cluster, _ := cmd.Flags().GetString("cluster")
 			region, _ := cmd.Flags().GetString("region")
 			nodeIP, _ := cmd.Flags().GetString("node-ip")
+			disableGvisor, _ := cmd.Flags().GetBool("disable-gvisor")
 			if cluster == "" || region == "" {
 				cmd.Help()
 				os.Exit(1)
@@ -149,6 +150,7 @@ func setupCmd(cfg *kubehubcli.Config) *cobra.Command {
 				WaitMessage:   "Waiting for cluster ready",
 				Verbose:       verbose,
 				DeviceMode:    deviceMode,
+				InstallGvisor: !disableGvisor,
 				Labels:        getMapFlag(cmd, "label"),
 				Annotations:   getMapFlag(cmd, "annotation"),
 			}
@@ -161,6 +163,7 @@ func setupCmd(cfg *kubehubcli.Config) *cobra.Command {
 	cmd.Flags().String("cluster", "", "Cluster name (required)")
 	cmd.Flags().String("region", "", "Cluster region (required)")
 	cmd.Flags().String("node-ip", "", "Node IP address (auto-detected if not set)")
+	cmd.Flags().Bool("disable-gvisor", false, "Do not install gVisor (runsc) or register the runsc containerd runtime handler")
 	cmd.Flags().StringArray("label", nil, "Node label (key=value, can be specified multiple times)")
 	cmd.Flags().StringArray("annotation", nil, "Node annotation (key=value, can be specified multiple times)")
 	cmd.MarkFlagRequired("cluster")

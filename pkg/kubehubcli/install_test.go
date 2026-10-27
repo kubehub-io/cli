@@ -44,6 +44,25 @@ func TestSnackOptionsWhenNonRoot(t *testing.T) {
 	require.Len(t, snackOptions(), 1)
 }
 
+func TestIsRuncVersionSufficient(t *testing.T) {
+	tests := []struct {
+		version string
+		want    bool
+	}{
+		{"runc version 1.2.6", false},
+		{"runc version 1.4.2", false},
+		{"runc version 1.4.3", true},
+		{"runc version v1.4.3", true},
+		{"runc version 1.5.0", true},
+		{"1.4", false},
+		{"", false},
+	}
+
+	for _, tt := range tests {
+		require.Equal(t, tt.want, isRuncVersionSufficient(tt.version), tt.version)
+	}
+}
+
 func TestReloadSysctlBusyBoxFallback(t *testing.T) {
 	orig := execSysctl
 	t.Cleanup(func() { execSysctl = orig })

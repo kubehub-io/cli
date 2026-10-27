@@ -2,7 +2,7 @@ package kubehubcli
 
 const (
 	ContainerdVersion     = "2.3.6"
-	RuncVersion           = "1.2.6"
+	RuncVersion           = "1.4.3"
 	CrictlVersion         = "v1.33.0"
 	ClusterDomain         = "cluster.local"
 	StaticPodPath         = "/etc/kubernetes/manifests"

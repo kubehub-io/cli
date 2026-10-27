@@ -9,6 +9,7 @@ import (
 
 var verbose bool
 var autoYes bool
+var acceptAll bool
 var deviceMode bool
 var tokenValue string
 
@@ -22,12 +23,13 @@ func main() {
 		Use:   "kubehubcli",
 		Short: "Nest control utility for host operations",
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
-			kubehubcli.SetAutoAccept(autoYes)
+			kubehubcli.SetAutoAccept(autoYes || acceptAll)
 			cfg.Token = tokenValue
 		},
 	}
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "verbose output")
 	rootCmd.PersistentFlags().BoolVarP(&autoYes, "yes", "y", false, "skip all confirmation prompts")
+	rootCmd.PersistentFlags().BoolVar(&acceptAll, "accept-all", false, "skip all confirmation prompts (same as --yes)")
 	rootCmd.PersistentFlags().BoolVar(&deviceMode, "device-mode", false, "force OAuth2 device authorization flow instead of opening a browser")
 	rootCmd.PersistentFlags().StringVar(&tokenValue, "token", "", "Pass a bearer token directly (skips OAuth2 authentication)")
 	rootCmd.AddCommand(setupCmd(cfg))
