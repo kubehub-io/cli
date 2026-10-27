@@ -404,12 +404,8 @@ func joinNodeToCluster(client *v202607.Client, authHeader v202607.RequestEditorF
 		return fmt.Errorf("create static pods: %w", err)
 	}
 
-	if info.Runc == nil || !isRuncVersionSufficient(info.Runc.Version) {
-		if err := installRunc(); err != nil {
-			return fmt.Errorf("install runc: %w", err)
-		}
-	} else {
-		slog.Info(fmt.Sprintf("runc %s already installed, skipping installation", runcVersionNumber(info.Runc.Version)))
+	if err := EnsureRunc(info); err != nil {
+		return fmt.Errorf("install runc: %w", err)
 	}
 
 	if info.Containerd == nil {
@@ -891,6 +887,25 @@ func installRunc() error {
 	return installRuncManual()
 }
 
+// EnsureRunc installs runc when it is missing and upgrades it when the
+// installed version is older than RuncVersion. Day-2 reconcile and day-1 join
+// share this so both paths converge on the same host state.
+func EnsureRunc(info *HostInfo) error {
+	if info != nil && info.Runc != nil {
+		version := runcVersionNumber(info.Runc.Version)
+		if isRuncVersionSufficient(version) {
+			slog.Info(fmt.Sprintf("runc %s already installed, skipping installation", version))
+			return nil
+		}
+		if version == "" {
+			slog.Info(fmt.Sprintf("runc version unknown, ensuring %s is installed", RuncVersion))
+		} else {
+			slog.Info(fmt.Sprintf("runc %s is older than %s, updating", version, RuncVersion))
+		}
+	}
+	return installRunc()
+}
+
 // isRuncVersionSufficient reports whether version is at least the version
 // kubehubcli installs. Older hosts are upgraded so they match the rest of the
 // cluster.
@@ -899,7 +914,10 @@ func isRuncVersionSufficient(version string) bool {
 	if !ok {
 		return false
 	}
-	required, _ := normalizeSemver(RuncVersion)
+	required, ok := normalizeSemver(RuncVersion)
+	if !ok {
+		return false
+	}
 	return semver.Compare(installed, required) >= 0
 }
 

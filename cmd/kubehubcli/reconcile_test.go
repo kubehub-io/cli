@@ -85,6 +85,7 @@ func TestClusterReconcileSendsETagHeader(t *testing.T) {
 func TestNodeReconcileSendsETagHeader(t *testing.T) {
 	withTestHome(t)
 	writeCachedToken(t)
+	stubReconcileHost(t)
 
 	const etag = `"node-etag-456"`
 	var gotIfMatch string
@@ -124,9 +125,35 @@ func stubGvisorInstall(t *testing.T, calls *int) {
 		*calls++
 		return nil
 	}
+}
+
+// stubReconcileHost avoids touching the real host and auto-accepts the plan.
+// It returns a counter that tracks how often the runc reconcile step ran.
+func stubReconcileHost(t *testing.T) *int {
+	t.Helper()
+
+	origDetect := detectHostOnNode
+	origEnsureRunc := ensureRuncOnNode
+	t.Cleanup(func() {
+		detectHostOnNode = origDetect
+		ensureRuncOnNode = origEnsureRunc
+	})
+
+	runcCalls := 0
+	detectHostOnNode = func() (*kubehubcli.HostInfo, error) {
+		return &kubehubcli.HostInfo{
+			Runc: &kubehubcli.BinaryInfo{Version: "runc version " + kubehubcli.RuncVersion},
+		}, nil
+	}
+	ensureRuncOnNode = func(info *kubehubcli.HostInfo) error {
+		runcCalls++
+		return nil
+	}
 
 	kubehubcli.SetAutoAccept(true)
 	t.Cleanup(func() { kubehubcli.SetAutoAccept(false) })
+
+	return &runcCalls
 }
 
 func nodeReconcileServer(t *testing.T, putCalls *int) *httptest.Server {
@@ -156,6 +183,7 @@ func TestNodeReconcileInstallsGvisorByDefault(t *testing.T) {
 
 	var gvisorCalls, putCalls int
 	stubGvisorInstall(t, &gvisorCalls)
+	runcCalls := stubReconcileHost(t)
 
 	srv := nodeReconcileServer(t, &putCalls)
 
@@ -168,6 +196,9 @@ func TestNodeReconcileInstallsGvisorByDefault(t *testing.T) {
 	if gvisorCalls != 1 {
 		t.Fatalf("gVisor install calls = %d, want 1", gvisorCalls)
 	}
+	if *runcCalls != 1 {
+		t.Fatalf("runc reconcile calls = %d, want 1", *runcCalls)
+	}
 	if putCalls != 1 {
 		t.Fatalf("node update calls = %d, want 1", putCalls)
 	}
@@ -179,6 +210,7 @@ func TestNodeReconcileDisableGvisor(t *testing.T) {
 
 	var gvisorCalls, putCalls int
 	stubGvisorInstall(t, &gvisorCalls)
+	runcCalls := stubReconcileHost(t)
 
 	srv := nodeReconcileServer(t, &putCalls)
 
@@ -190,6 +222,9 @@ func TestNodeReconcileDisableGvisor(t *testing.T) {
 
 	if gvisorCalls != 0 {
 		t.Fatalf("gVisor install calls = %d, want 0", gvisorCalls)
+	}
+	if *runcCalls != 1 {
+		t.Fatalf("runc reconcile calls = %d, want 1", *runcCalls)
 	}
 	if putCalls != 1 {
 		t.Fatalf("node update calls = %d, want 1", putCalls)

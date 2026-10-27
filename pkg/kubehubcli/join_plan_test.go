@@ -36,3 +36,29 @@ func TestJoinPlanWriteToFormatsSectionsAndWrapsText(t *testing.T) {
 		require.Equal(t, 70, len([]rune(line)), "plan line should align with the border: %q", line)
 	}
 }
+
+func TestNewReconcilePlanDescribesRuncAndGvisor(t *testing.T) {
+	info := &HostInfo{Runc: &BinaryInfo{Version: "runc version 1.1.0"}}
+	plan := NewReconcilePlan(info, true)
+
+	var output strings.Builder
+	require.NoError(t, plan.writeTo(&output))
+	text := output.String()
+
+	require.Contains(t, text, "NODE RECONCILE PLAN")
+	require.Contains(t, text, "Update runc from 1.1.0 to "+RuncVersion)
+	require.Contains(t, text, "gVisor")
+}
+
+func TestNewReconcilePlanSkipsCurrentRuncAndGvisor(t *testing.T) {
+	info := &HostInfo{Runc: &BinaryInfo{Version: "runc version " + RuncVersion}}
+	plan := NewReconcilePlan(info, false)
+
+	var output strings.Builder
+	require.NoError(t, plan.writeTo(&output))
+	text := output.String()
+
+	require.Contains(t, text, "runc "+RuncVersion+" already installed")
+	require.NotContains(t, text, "gVisor")
+	require.NotContains(t, text, "NETWORK SETUP")
+}

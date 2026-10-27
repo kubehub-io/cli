@@ -12,6 +12,9 @@ import (
 )
 
 type JoinPlan struct {
+	// Title is shown in the plan header. It defaults to "NODE JOIN PLAN" when
+	// empty so existing callers keep working.
+	Title    string
 	Network  []JoinPlanItem
 	System   []JoinPlanItem
 	Software []JoinPlanItem
@@ -32,7 +35,11 @@ func (p JoinPlan) writeTo(w io.Writer) error {
 		{"SOFTWARE INSTALL", p.Software},
 	}
 	width := 68
-	if _, err := fmt.Fprintf(w, "\n╭%s╮\n│%s│\n", repeat("─", width), center("NODE JOIN PLAN", width)); err != nil {
+	title := p.Title
+	if title == "" {
+		title = "NODE JOIN PLAN"
+	}
+	if _, err := fmt.Fprintf(w, "\n╭%s╮\n│%s│\n", repeat("─", width), center(title, width)); err != nil {
 		return err
 	}
 	for _, section := range sections {
@@ -98,14 +105,24 @@ func writePlanText(w io.Writer, prefix, text string, width int) error {
 }
 
 func confirmJoinPlan(plan JoinPlan) error {
+	return confirmPlan(plan, "Press Enter to apply this plan and join the cluster, or Ctrl+C to cancel: ")
+}
+
+// ConfirmReconcilePlan prints the host reconcile plan and asks the operator to
+// confirm before any host changes are applied.
+func ConfirmReconcilePlan(plan JoinPlan) error {
+	return confirmPlan(plan, "Press Enter to apply this plan and reconcile the node, or Ctrl+C to cancel: ")
+}
+
+func confirmPlan(plan JoinPlan, prompt string) error {
 	if err := plan.writeTo(os.Stdout); err != nil {
-		return fmt.Errorf("print join plan: %w", err)
+		return fmt.Errorf("print plan: %w", err)
 	}
 	if AutoAccept() {
 		fmt.Fprintln(os.Stdout, "Proceeding (--yes).")
 		return nil
 	}
-	fmt.Fprint(os.Stdout, "Press Enter to apply this plan and join the cluster, or Ctrl+C to cancel: ")
+	fmt.Fprint(os.Stdout, prompt)
 	if _, err := bufio.NewReader(os.Stdin).ReadString('\n'); err != nil {
 		return fmt.Errorf("read confirmation: %w", err)
 	}
@@ -154,23 +171,7 @@ func newJoinPlan(info *HostInfo, opts *JoinOptions, preflight *PreflightResult, 
 		return plan
 	}
 
-	// runc
-	runcSummary := "Install runc " + RuncVersion
-	runcDesc := "runc not detected on this host"
-	if info.Runc != nil {
-		version := runcVersionNumber(info.Runc.Version)
-		if isRuncVersionSufficient(version) {
-			runcSummary = fmt.Sprintf("runc %s already installed (sufficient)", version)
-			runcDesc = "No update needed"
-		} else if version != "" {
-			runcSummary = fmt.Sprintf("Update runc from %s to %s", version, RuncVersion)
-			runcDesc = "Installed version is too old"
-		} else {
-			runcSummary = "Ensure runc is installed and up to date"
-			runcDesc = "Install or update only if the host version is missing or too old"
-		}
-	}
-	plan.Software = append(plan.Software, JoinPlanItem{Summary: runcSummary, Description: runcDesc})
+	plan.Software = append(plan.Software, runcPlanItem(info))
 
 	// containerd
 	if info.Containerd == nil {
@@ -203,6 +204,59 @@ func newJoinPlan(info *HostInfo, opts *JoinOptions, preflight *PreflightResult, 
 		plan.Software = append(plan.Software, JoinPlanItem{Summary: "gVisor runtime (runsc)"})
 	}
 	return plan
+}
+
+// NewReconcilePlan describes the host-side changes that `node reconcile`
+// applies. A node that has already joined only needs its software refreshed, so
+// the plan mirrors the software section of the join plan instead of repeating
+// the one-time network and kubelet setup.
+func NewReconcilePlan(info *HostInfo, installGvisor bool) JoinPlan {
+	plan := JoinPlan{Title: "NODE RECONCILE PLAN"}
+	plan.Software = append(plan.Software, runcPlanItem(info))
+
+	if installGvisor {
+		if gvisorInstalled() {
+			plan.Software = append(plan.Software, JoinPlanItem{
+				Summary:     "Refresh gVisor runtime handler (runsc)",
+				Description: "runsc is installed; rewrite the containerd runtime configuration",
+			})
+		} else {
+			plan.Software = append(plan.Software, JoinPlanItem{
+				Summary:     "Install gVisor runtime (runsc)",
+				Description: "Download runsc and register the containerd runtime handler",
+			})
+		}
+	}
+
+	return plan
+}
+
+// runcPlanItem describes what has to happen for runc on this host.
+func runcPlanItem(info *HostInfo) JoinPlanItem {
+	if info == nil || info.Runc == nil {
+		return JoinPlanItem{
+			Summary:     "Install runc " + RuncVersion,
+			Description: "runc not detected on this host",
+		}
+	}
+
+	version := runcVersionNumber(info.Runc.Version)
+	if isRuncVersionSufficient(version) {
+		return JoinPlanItem{
+			Summary:     fmt.Sprintf("runc %s already installed (sufficient)", version),
+			Description: "No update needed",
+		}
+	}
+	if version != "" {
+		return JoinPlanItem{
+			Summary:     fmt.Sprintf("Update runc from %s to %s", version, RuncVersion),
+			Description: "Installed version is too old",
+		}
+	}
+	return JoinPlanItem{
+		Summary:     "Ensure runc is installed and up to date",
+		Description: "Install or update only if the host version is missing or too old",
+	}
 }
 
 func runcVersionNumber(version string) string {

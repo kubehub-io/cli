@@ -49,17 +49,19 @@ func TestIsRuncVersionSufficient(t *testing.T) {
 		version string
 		want    bool
 	}{
-		{"runc version 1.2.6", false},
-		{"runc version 1.4.2", false},
-		{"runc version 1.4.3", true},
-		{"runc version v1.4.3", true},
-		{"runc version 1.5.0", true},
+		{"runc version 1.0.0", false},
+		{"runc version " + RuncVersion, true},
+		{"runc version v" + RuncVersion, true},
+		{"runc version 99.0.0", true},
 		{"1.4", false},
 		{"", false},
+		{"not a version", false},
 	}
 
 	for _, tt := range tests {
-		require.Equal(t, tt.want, isRuncVersionSufficient(tt.version), tt.version)
+		t.Run(tt.version, func(t *testing.T) {
+			require.Equal(t, tt.want, isRuncVersionSufficient(tt.version))
+		})
 	}
 }
 
