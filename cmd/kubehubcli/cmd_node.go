@@ -201,30 +201,28 @@ func nodeDeleteCmd(cfg *kubehubcli.Config) *cobra.Command {
 	return cmd
 }
 
-// installGvisorOnHost is a seam so tests can stub the host-side gVisor install.
-var installGvisorOnHost = kubehubcli.InstallGvisor
+// Host-side seams so tests can exercise reconcile without touching the host.
+var (
+	installGvisorOnHost = kubehubcli.InstallGvisor
+	detectHostOnNode    = kubehubcli.DetectHost
+	ensureRuncOnNode    = kubehubcli.EnsureRunc
+)
 
 func nodeReconcileCmd(cfg *kubehubcli.Config) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "reconcile",
-		Short: "Reconcile node state",
+		Short: "Reconcile node software and state",
 		Run: func(cmd *cobra.Command, args []string) {
 			cluster, _ := cmd.Flags().GetString("cluster")
 			node, _ := cmd.Flags().GetString("node")
 			disableGvisor, _ := cmd.Flags().GetBool("disable-gvisor")
+			installGvisor := !disableGvisor
 			if cluster == "" || node == "" {
 				cmd.Help()
 				os.Exit(1)
 			}
 
 			ctx := context.Background()
-
-			if !disableGvisor {
-				kubehubcli.PromptConfirm("This will install gVisor on this host and restart containerd. Continue?")
-				if err := installGvisorOnHost(); err != nil {
-					errorExit("%v", err)
-				}
-			}
 
 			client, token, err := getAuthenticatedClient(ctx, cfg)
 			if err != nil {
@@ -247,6 +245,27 @@ func nodeReconcileCmd(cfg *kubehubcli.Config) *cobra.Command {
 			var nodeInfo v202607.Node
 			if err := json.NewDecoder(resp.Body).Decode(&nodeInfo); err != nil {
 				errorExit("decode response: %v", err)
+			}
+
+			// Detect the host before applying anything so the operator can see
+			// exactly which software changes reconcile will make.
+			info, err := detectHostOnNode()
+			if err != nil {
+				errorExit("detect host: %v", err)
+			}
+
+			plan := kubehubcli.NewReconcilePlan(info, installGvisor)
+			if err := kubehubcli.ConfirmReconcilePlan(plan); err != nil {
+				errorExit("%v", err)
+			}
+
+			if err := ensureRuncOnNode(info); err != nil {
+				errorExit("ensure runc: %v", err)
+			}
+			if installGvisor {
+				if err := installGvisorOnHost(); err != nil {
+					errorExit("%v", err)
+				}
 			}
 
 			nodeRequest := v202607.Node{
