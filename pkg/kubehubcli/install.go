@@ -14,12 +14,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"text/template"
 	"time"
 
 	"github.com/gogrlx/snack"
 	"github.com/gogrlx/snack/detect"
 	v202607 "github.com/kubehub-io/kubehubcli/pkg/clientlib/v202607"
+	"golang.org/x/mod/semver"
 )
 
 var currentEUID = os.Geteuid
@@ -402,12 +404,12 @@ func joinNodeToCluster(client *v202607.Client, authHeader v202607.RequestEditorF
 		return fmt.Errorf("create static pods: %w", err)
 	}
 
-	if info.Runc == nil {
+	if info.Runc == nil || !isRuncVersionSufficient(info.Runc.Version) {
 		if err := installRunc(); err != nil {
 			return fmt.Errorf("install runc: %w", err)
 		}
 	} else {
-		slog.Info("runc already installed, skipping installation")
+		slog.Info(fmt.Sprintf("runc %s already installed, skipping installation", runcVersionNumber(info.Runc.Version)))
 	}
 
 	if info.Containerd == nil {
@@ -889,10 +891,31 @@ func installRunc() error {
 	return installRuncManual()
 }
 
+// isRuncVersionSufficient reports whether version is at least the version
+// kubehubcli installs. Older hosts are upgraded so they match the rest of the
+// cluster.
 func isRuncVersionSufficient(version string) bool {
-	var major, minor int
-	fmt.Sscanf(version, "%d.%d", &major, &minor)
-	return major > 1 || (major == 1 && minor >= 2)
+	installed, ok := normalizeSemver(runcVersionNumber(version))
+	if !ok {
+		return false
+	}
+	required, _ := normalizeSemver(RuncVersion)
+	return semver.Compare(installed, required) >= 0
+}
+
+// normalizeSemver returns v in canonical "vX.Y.Z" form.
+func normalizeSemver(v string) (string, bool) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return "", false
+	}
+	if !strings.HasPrefix(v, "v") {
+		v = "v" + v
+	}
+	if !semver.IsValid(v) {
+		return "", false
+	}
+	return semver.Canonical(v), true
 }
 
 func installRuncManual() error {
