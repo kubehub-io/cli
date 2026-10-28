@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -90,6 +91,9 @@ func TestNodeReconcileSendsETagHeader(t *testing.T) {
 	const etag = `"node-etag-456"`
 	var gotIfMatch string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/nodes/node1") {
+			t.Errorf("node path = %q, want local node name node1", r.URL.Path)
+		}
 		switch r.Method {
 		case http.MethodGet:
 			w.Header().Set("Content-Type", "application/json")
@@ -107,7 +111,7 @@ func TestNodeReconcileSendsETagHeader(t *testing.T) {
 	defer srv.Close()
 
 	cmd := nodeReconcileCmd(&kubehubcli.Config{Server: srv.URL})
-	cmd.SetArgs([]string{"--cluster", "pp2", "--node", "node1", "--disable-gvisor"})
+	cmd.SetArgs([]string{"--cluster", "pp2", "--disable-gvisor"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
@@ -134,11 +138,14 @@ func stubReconcileHost(t *testing.T) *int {
 
 	origDetect := detectHostOnNode
 	origEnsureRunc := ensureRuncOnNode
+	origLocalNodeName := localNodeNameOnHost
 	t.Cleanup(func() {
 		detectHostOnNode = origDetect
 		ensureRuncOnNode = origEnsureRunc
+		localNodeNameOnHost = origLocalNodeName
 	})
 
+	localNodeNameOnHost = func() (string, error) { return "node1", nil }
 	runcCalls := 0
 	detectHostOnNode = func() (*kubehubcli.HostInfo, error) {
 		return &kubehubcli.HostInfo{
@@ -159,6 +166,9 @@ func stubReconcileHost(t *testing.T) *int {
 func nodeReconcileServer(t *testing.T, putCalls *int) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/nodes/node1") {
+			t.Errorf("node path = %q, want local node name node1", r.URL.Path)
+		}
 		switch r.Method {
 		case http.MethodGet:
 			w.Header().Set("Content-Type", "application/json")
@@ -188,7 +198,7 @@ func TestNodeReconcileInstallsGvisorByDefault(t *testing.T) {
 	srv := nodeReconcileServer(t, &putCalls)
 
 	cmd := nodeReconcileCmd(&kubehubcli.Config{Server: srv.URL})
-	cmd.SetArgs([]string{"--cluster", "pp2", "--node", "node1"})
+	cmd.SetArgs([]string{"--cluster", "pp2"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
@@ -215,7 +225,7 @@ func TestNodeReconcileDisableGvisor(t *testing.T) {
 	srv := nodeReconcileServer(t, &putCalls)
 
 	cmd := nodeReconcileCmd(&kubehubcli.Config{Server: srv.URL})
-	cmd.SetArgs([]string{"--cluster", "pp2", "--node", "node1", "--disable-gvisor"})
+	cmd.SetArgs([]string{"--cluster", "pp2", "--disable-gvisor"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}

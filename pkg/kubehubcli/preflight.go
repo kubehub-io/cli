@@ -313,7 +313,7 @@ func findInterfaceForCIDR(target *net.IPNet) string {
 	return ""
 }
 
-func checkExistingNodesNetwork(ctx context.Context, client *v202607.Client, authHeader v202607.RequestEditorFn, opts *JoinOptions, info *HostInfo) error {
+func checkExistingNodesNetwork(ctx context.Context, client *v202607.Client, authHeader v202607.RequestEditorFn, opts *JoinOptions, info *HostInfo, nodeIP string) error {
 	if opts == nil {
 		return nil
 	}
@@ -341,6 +341,10 @@ func checkExistingNodesNetwork(ctx context.Context, client *v202607.Client, auth
 
 	if len(nodes) == 0 {
 		return nil
+	}
+
+	if err := checkNodeIPConflicts(nodes, nodeIP); err != nil {
+		return err
 	}
 
 	var firstMismatchName, firstMismatchIP string

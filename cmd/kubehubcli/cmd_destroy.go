@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"os"
 
 	v202607 "github.com/kubehub-io/kubehubcli/pkg/clientlib/v202607"
 	"github.com/kubehub-io/kubehubcli/pkg/kubehubcli"
@@ -75,7 +74,10 @@ This is a destructive operation that will:
 				errorExit("list nodes failed (status %d): %s", nonOKStatus, errMsg)
 			}
 
-			hostname, _ := os.Hostname()
+			hostname, err := kubehubcli.LocalNodeName()
+			if err != nil {
+				errorExit("get node name: %v", err)
+			}
 
 			var currentFound bool
 			var otherNodeNames []string

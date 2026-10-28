@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"os"
 
 	v202607 "github.com/kubehub-io/kubehubcli/pkg/clientlib/v202607"
 )
@@ -66,7 +65,10 @@ func ResetNode(opts *ResetOptions) error {
 	PromptConfirm("Are you sure you want to proceed?")
 	slog.Info("")
 
-	hostname, _ := os.Hostname()
+	hostname, err := LocalNodeName()
+	if err != nil {
+		slog.Warn(fmt.Sprintf("  warning: %v", err))
+	}
 	if hostname != "" {
 		slog.Info(fmt.Sprintf("--- Deleting node %s from cluster %s ---", hostname, opts.ClusterName))
 

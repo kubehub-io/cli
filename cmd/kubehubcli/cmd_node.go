@@ -206,6 +206,7 @@ var (
 	installGvisorOnHost = kubehubcli.InstallGvisor
 	detectHostOnNode    = kubehubcli.DetectHost
 	ensureRuncOnNode    = kubehubcli.EnsureRunc
+	localNodeNameOnHost = kubehubcli.LocalNodeName
 )
 
 func nodeReconcileCmd(cfg *kubehubcli.Config) *cobra.Command {
@@ -214,12 +215,18 @@ func nodeReconcileCmd(cfg *kubehubcli.Config) *cobra.Command {
 		Short: "Reconcile node software and state",
 		Run: func(cmd *cobra.Command, args []string) {
 			cluster, _ := cmd.Flags().GetString("cluster")
-			node, _ := cmd.Flags().GetString("node")
 			disableGvisor, _ := cmd.Flags().GetBool("disable-gvisor")
 			installGvisor := !disableGvisor
-			if cluster == "" || node == "" {
+			if cluster == "" {
 				cmd.Help()
 				os.Exit(1)
+			}
+
+			// Reconcile changes the local host, so it must target the same
+			// node name that join registered for this machine.
+			node, err := localNodeNameOnHost()
+			if err != nil {
+				errorExit("get node name: %v", err)
 			}
 
 			ctx := context.Background()
@@ -246,6 +253,9 @@ func nodeReconcileCmd(cfg *kubehubcli.Config) *cobra.Command {
 			if err := json.NewDecoder(resp.Body).Decode(&nodeInfo); err != nil {
 				errorExit("decode response: %v", err)
 			}
+			if nodeInfo.Metadata == nil || nodeInfo.Metadata.Name == nil || *nodeInfo.Metadata.Name != node {
+				errorExit("node response does not match local node %q", node)
+			}
 
 			// Detect the host before applying anything so the operator can see
 			// exactly which software changes reconcile will make.
@@ -270,7 +280,7 @@ func nodeReconcileCmd(cfg *kubehubcli.Config) *cobra.Command {
 
 			nodeRequest := v202607.Node{
 				Metadata: &v202607.NodeMetadata{
-					Name: nodeInfo.Metadata.Name,
+					Name: &node,
 				},
 				Spec: &v202607.NodeSpec{
 					Os:   nodeInfo.Spec.Os,
@@ -306,9 +316,7 @@ func nodeReconcileCmd(cfg *kubehubcli.Config) *cobra.Command {
 		},
 	}
 	cmd.Flags().String("cluster", "", "Cluster name (required)")
-	cmd.Flags().String("node", "", "Node name (required)")
 	cmd.Flags().Bool("disable-gvisor", false, "Do not install gVisor (runsc) on this host or register the runsc containerd runtime handler (day-2)")
 	cmd.MarkFlagRequired("cluster")
-	cmd.MarkFlagRequired("node")
 	return cmd
 }

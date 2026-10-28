@@ -207,9 +207,9 @@ func joinNodeToCluster(client *v202607.Client, authHeader v202607.RequestEditorF
 	slog.Info("=== Joining Cluster ===")
 	slog.Info(fmt.Sprintf("Cluster: %s", opts.ClusterName))
 
-	hostname, err := os.Hostname()
+	hostname, err := LocalNodeName()
 	if err != nil {
-		return fmt.Errorf("get hostname: %w", err)
+		return err
 	}
 	slog.Info(fmt.Sprintf("Hostname: %s", hostname))
 
@@ -231,10 +231,6 @@ func joinNodeToCluster(client *v202607.Client, authHeader v202607.RequestEditorF
 		_ = preflight
 	}
 
-	if err := checkExistingNodesNetwork(ctx, client, authHeader, opts, info); err != nil {
-		return fmt.Errorf("join check: %w", err)
-	}
-
 	nodeIP := opts.NodeIP
 	if nodeIP != "" {
 		slog.Info(fmt.Sprintf("Validating IP: %s", nodeIP))
@@ -244,6 +240,10 @@ func joinNodeToCluster(client *v202607.Client, authHeader v202607.RequestEditorF
 		slog.Info("IP validated successfully")
 	} else if len(info.HostIPs) > 0 {
 		nodeIP = info.HostIPs[0]
+	}
+
+	if err := checkExistingNodesNetwork(ctx, client, authHeader, opts, info, nodeIP); err != nil {
+		return fmt.Errorf("join check: %w", err)
 	}
 
 	laptop := isLaptop()
@@ -376,6 +376,10 @@ func joinNodeToCluster(client *v202607.Client, authHeader v202607.RequestEditorF
 
 	if err := storeCerts(bootstrapSecret); err != nil {
 		return fmt.Errorf("store certs: %w", err)
+	}
+
+	if err := checkExistingNodesReachable(ctx, client, authHeader, opts.ClusterName, hostname); err != nil {
+		return err
 	}
 
 	if laptop {
