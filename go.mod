@@ -5,7 +5,7 @@ go 1.26.5
 require (
 	github.com/gogrlx/snack v0.4.5
 	github.com/jaypipes/ghw v0.26.0
-	github.com/oapi-codegen/runtime v1.7.0
+	github.com/oapi-codegen/runtime v1.8.0
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.12.1
 	golang.org/x/mod v0.42.0
