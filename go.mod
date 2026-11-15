@@ -4,12 +4,12 @@ go 1.26.5
 
 require (
 	github.com/gogrlx/snack v0.4.5
-	github.com/jaypipes/ghw v0.26.0
-	github.com/oapi-codegen/runtime v1.8.0
+	github.com/jaypipes/ghw v0.27.0
+	github.com/oapi-codegen/runtime v1.9.0
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.12.1
-	golang.org/x/mod v0.42.0
-	golang.org/x/oauth2 v0.37.0
+	golang.org/x/mod v0.43.0
+	golang.org/x/oauth2 v0.38.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
