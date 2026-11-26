@@ -8,7 +8,7 @@ import (
 	"regexp"
 	"strings"
 
-	v202607 "github.com/kubehub-io/kubehubcli/pkg/clientlib/v202607"
+	v202611 "github.com/kubehub-io/kubehubcli/pkg/clientlib/v202611"
 )
 
 type JoinPlan struct {
@@ -130,11 +130,11 @@ func confirmPlan(plan JoinPlan, prompt string) error {
 }
 
 func newJoinPlan(info *HostInfo, opts *JoinOptions, preflight *PreflightResult, laptop bool, extra ...any) JoinPlan {
-	var clusterInfo *v202607.Cluster
+	var clusterInfo *v202611.Cluster
 	componentVersion := ""
 	for _, e := range extra {
 		switch v := e.(type) {
-		case *v202607.Cluster:
+		case *v202611.Cluster:
 			clusterInfo = v
 			if componentVersion == "" {
 				componentVersion = resolveClusterComponentVersion(v)

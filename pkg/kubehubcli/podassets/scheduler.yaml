@@ -12,7 +12,8 @@ spec:
         - kube-scheduler
       args:
         - --kubeconfig={{.KubeconfigPath}}
-        - --leader-elect=false
+        - --leader-elect=true
+        - {{.FeatureGateArgLine}}
       volumeMounts:
         - name: pki
           mountPath: /etc/kubernetes/pki

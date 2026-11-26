@@ -25,3 +25,6 @@ resolvConf: {{.ResolvConfFile}}
 rotateCertificates: false
 serverTLSBootstrap: false
 staticPodPath: {{.StaticPodPath}}
+featureGates:
+{{range $name, $enabled := .FeatureGates}}  {{$name}}: {{$enabled}}
+{{end}}

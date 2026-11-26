@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"os"
 
-	v202607 "github.com/kubehub-io/kubehubcli/pkg/clientlib/v202607"
+	v202611 "github.com/kubehub-io/kubehubcli/pkg/clientlib/v202611"
 	"github.com/kubehub-io/kubehubcli/pkg/kubehubcli"
 	"github.com/spf13/cobra"
 )
@@ -44,7 +44,7 @@ This is a destructive operation that will:
 				errorExit("get cluster: %v", err)
 			}
 
-			var clusterInfo v202607.Cluster
+			var clusterInfo v202611.Cluster
 			if getResp.StatusCode == http.StatusOK {
 				if err := json.NewDecoder(getResp.Body).Decode(&clusterInfo); err != nil {
 					getResp.Body.Close()
@@ -61,7 +61,7 @@ This is a destructive operation that will:
 				errorExit("list nodes: %v", err)
 			}
 
-			var nodes []v202607.Node
+			var nodes []v202611.Node
 			if listResp.StatusCode == http.StatusOK {
 				if err := json.NewDecoder(listResp.Body).Decode(&nodes); err != nil {
 					listResp.Body.Close()
@@ -70,7 +70,7 @@ This is a destructive operation that will:
 				listResp.Body.Close()
 			} else {
 				nonOKStatus := listResp.StatusCode
-				errMsg := v202607.ParseErrorResponse(listResp)
+				errMsg := v202611.ParseErrorResponse(listResp)
 				listResp.Body.Close()
 				errorExit("list nodes failed (status %d): %s", nonOKStatus, errMsg)
 			}
@@ -132,12 +132,9 @@ This is a destructive operation that will:
 			}
 
 			slog.Info(fmt.Sprintf("--- Deleting cluster %s ---", cluster))
-			deleteResp, err := client.DeleteCluster(ctx, cluster, authHeader, func(ctx context.Context, req *http.Request) error {
-				if clusterETag != "" {
-					req.Header.Set("If-Match", clusterETag)
-				}
-				return nil
-			})
+			deleteResp, err := client.DeleteCluster(ctx, cluster, &v202611.DeleteClusterParams{
+				IfMatch: clusterETag,
+			}, authHeader)
 			if err != nil {
 				errorExit("delete cluster request: %v", err)
 			}
@@ -145,7 +142,7 @@ This is a destructive operation that will:
 			if deleteResp.StatusCode == http.StatusOK || deleteResp.StatusCode == http.StatusNoContent {
 				slog.Info("  Cluster deleted")
 			} else {
-				errorExit("delete cluster: %s", v202607.ParseErrorResponse(deleteResp))
+				errorExit("delete cluster: %s", v202611.ParseErrorResponse(deleteResp))
 			}
 
 			slog.Info("Cluster destroyed.")

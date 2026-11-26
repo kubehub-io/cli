@@ -14,13 +14,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"text/template"
 	"time"
 
 	"github.com/gogrlx/snack"
 	"github.com/gogrlx/snack/detect"
-	v202607 "github.com/kubehub-io/kubehubcli/pkg/clientlib/v202607"
+	v202611 "github.com/kubehub-io/kubehubcli/pkg/clientlib/v202611"
 	"golang.org/x/mod/semver"
 )
 
@@ -148,7 +149,7 @@ func JoinCluster(opts *JoinOptions) error {
 		}
 	}
 
-	client, err := v202607.NewClient(opts.ServerURL)
+	client, err := v202611.NewClient(opts.ServerURL)
 	if err != nil {
 		return fmt.Errorf("create client: %w", err)
 	}
@@ -164,11 +165,11 @@ func JoinCluster(opts *JoinOptions) error {
 		return fmt.Errorf("get cluster: %w", err)
 	}
 	if clusterResp.StatusCode != http.StatusOK {
-		errMsg := v202607.ParseErrorResponse(clusterResp)
+		errMsg := v202611.ParseErrorResponse(clusterResp)
 		clusterResp.Body.Close()
 		return fmt.Errorf("cluster %s not found: %s", opts.ClusterName, errMsg)
 	}
-	var clusterInfo v202607.Cluster
+	var clusterInfo v202611.Cluster
 	if err := json.NewDecoder(clusterResp.Body).Decode(&clusterInfo); err != nil {
 		clusterResp.Body.Close()
 		return fmt.Errorf("decode cluster response: %w", err)
@@ -179,7 +180,7 @@ func JoinCluster(opts *JoinOptions) error {
 	return joinNodeToCluster(client, authHeader, opts, &clusterInfo)
 }
 
-func JoinClusterWithCluster(opts *JoinOptions, clusterInfo *v202607.Cluster) error {
+func JoinClusterWithCluster(opts *JoinOptions, clusterInfo *v202611.Cluster) error {
 	token := opts.Token
 	if token == "" {
 		auth := NewAuthenticator(opts.OIDCIssuerURL, opts.OIDCClientID).WithVerbose(opts.Verbose).WithDeviceMode(opts.DeviceMode)
@@ -190,7 +191,7 @@ func JoinClusterWithCluster(opts *JoinOptions, clusterInfo *v202607.Cluster) err
 		}
 	}
 
-	client, err := v202607.NewClient(opts.ServerURL)
+	client, err := v202611.NewClient(opts.ServerURL)
 	if err != nil {
 		return fmt.Errorf("create client: %w", err)
 	}
@@ -203,7 +204,7 @@ func JoinClusterWithCluster(opts *JoinOptions, clusterInfo *v202607.Cluster) err
 	return joinNodeToCluster(client, authHeader, opts, clusterInfo)
 }
 
-func joinNodeToCluster(client *v202607.Client, authHeader v202607.RequestEditorFn, opts *JoinOptions, clusterInfo *v202607.Cluster) error {
+func joinNodeToCluster(client *v202611.Client, authHeader v202611.RequestEditorFn, opts *JoinOptions, clusterInfo *v202611.Cluster) error {
 	slog.Info("=== Joining Cluster ===")
 	slog.Info(fmt.Sprintf("Cluster: %s", opts.ClusterName))
 
@@ -262,7 +263,7 @@ func joinNodeToCluster(client *v202607.Client, authHeader v202607.RequestEditorF
 	}
 
 	if getResp.StatusCode == http.StatusOK {
-		var existingNode v202607.Node
+		var existingNode v202611.Node
 		if err := json.NewDecoder(getResp.Body).Decode(&existingNode); err != nil {
 			getResp.Body.Close()
 			return fmt.Errorf("decode existing node: %w", err)
@@ -282,14 +283,14 @@ func joinNodeToCluster(client *v202607.Client, authHeader v202607.RequestEditorF
 	} else if getResp.StatusCode == http.StatusNotFound {
 		getResp.Body.Close()
 
-		nodeReq := v202607.Node{
-			Metadata: &v202607.NodeMetadata{
+		nodeReq := v202611.Node{
+			Metadata: &v202611.NodeMetadata{
 				Name: &hostname,
 			},
-			Spec: &v202607.NodeSpec{
+			Spec: &v202611.NodeSpec{
 				Os:   &info.OS,
 				Arch: &info.Arch,
-				Meta: &v202607.NodeInfo{
+				Meta: &v202611.NodeInfo{
 					Ipv4:   &nodeIP,
 					Labels: ptrMap(opts.Labels),
 				},
@@ -304,7 +305,7 @@ func joinNodeToCluster(client *v202607.Client, authHeader v202607.RequestEditorF
 		}
 
 		if createResp.StatusCode != http.StatusOK {
-			errMsg := v202607.ParseErrorResponse(createResp)
+			errMsg := v202611.ParseErrorResponse(createResp)
 			createResp.Body.Close()
 			return fmt.Errorf("create node failed: %s", errMsg)
 		}
@@ -312,12 +313,12 @@ func joinNodeToCluster(client *v202607.Client, authHeader v202607.RequestEditorF
 
 		slog.Info("Node created successfully!")
 	} else {
-		errMsg := v202607.ParseErrorResponse(getResp)
+		errMsg := v202611.ParseErrorResponse(getResp)
 		getResp.Body.Close()
 		return fmt.Errorf("get node failed: %s", errMsg)
 	}
 
-	var bootstrapSecret v202607.BootstrapSecretResponse
+	var bootstrapSecret v202611.BootstrapSecretResponse
 	{
 		const maxAttempts = 30
 		var lastErr error
@@ -341,7 +342,7 @@ func joinNodeToCluster(client *v202607.Client, authHeader v202607.RequestEditorF
 
 			if bootstrapResp.StatusCode != http.StatusOK {
 				bootstrapResp.Body.Close()
-				lastErr = fmt.Errorf("bootstrap failed: %s", v202607.ParseErrorResponse(bootstrapResp))
+				lastErr = fmt.Errorf("bootstrap failed: %s", v202611.ParseErrorResponse(bootstrapResp))
 				continue
 			}
 
@@ -388,7 +389,7 @@ func joinNodeToCluster(client *v202607.Client, authHeader v202607.RequestEditorF
 		return fmt.Errorf("apply sysctl: %w", err)
 	}
 
-	if err := generateKubeletConfig(hostname, ptrStr(bootstrapSecret.ClusterDNS), kubeDNSDefaultIP); err != nil {
+	if err := generateKubeletConfig(hostname, ptrStr(bootstrapSecret.ClusterDNS), kubeDNSDefaultIP, bootstrapSecret.ComponentConfig); err != nil {
 		return fmt.Errorf("generate kubelet config: %w", err)
 	}
 
@@ -400,7 +401,7 @@ func joinNodeToCluster(client *v202607.Client, authHeader v202607.RequestEditorF
 		return fmt.Errorf("generate controller-manager kubeconfig: %w", err)
 	}
 
-	if err := createStaticPods(podCIDR, serviceCIDR, controllerImage, schedulerImage); err != nil {
+	if err := createStaticPods(podCIDR, serviceCIDR, controllerImage, schedulerImage, bootstrapSecret.ComponentConfig); err != nil {
 		return fmt.Errorf("create static pods: %w", err)
 	}
 
@@ -462,23 +463,17 @@ func joinNodeToCluster(client *v202607.Client, authHeader v202607.RequestEditorF
 	return nil
 }
 
-func resolveClusterComponentVersion(clusterInfo *v202607.Cluster) string {
-	if clusterInfo.Status != nil && clusterInfo.Status.ControlPlane != nil && clusterInfo.Status.ControlPlane.Components != nil {
-		apiSrv := clusterInfo.Status.ControlPlane.Components.KubeApiserver
-		if apiSrv != nil && apiSrv.Version != nil && *apiSrv.Version != "" {
-			return *apiSrv.Version
-		}
-	}
+func resolveClusterComponentVersion(clusterInfo *v202611.Cluster) string {
 	if clusterInfo.Status != nil && clusterInfo.Status.ControlPlaneComponents != nil {
-		apiSrv := clusterInfo.Status.ControlPlaneComponents.KubeApiserver
-		if apiSrv != nil && apiSrv.Version != nil && *apiSrv.Version != "" {
+		apiSrv, ok := (*clusterInfo.Status.ControlPlaneComponents)["kubeApiserver"]
+		if ok && apiSrv.Version != nil && *apiSrv.Version != "" {
 			return *apiSrv.Version
 		}
 	}
 	return ""
 }
 
-func resolveClusterCIDRs(clusterInfo *v202607.Cluster) (podCIDR, svcCIDR, dnsIP string) {
+func resolveClusterCIDRs(clusterInfo *v202611.Cluster) (podCIDR, svcCIDR, dnsIP string) {
 	podCIDR = "10.10.0.0/16"
 	svcCIDR = "10.20.0.0/16"
 	dnsIP = "10.20.0.10"
@@ -496,7 +491,7 @@ func resolveClusterCIDRs(clusterInfo *v202607.Cluster) (podCIDR, svcCIDR, dnsIP 
 	return
 }
 
-func storeCerts(resp v202607.BootstrapSecretResponse) error {
+func storeCerts(resp v202611.BootstrapSecretResponse) error {
 	slog.Info("--- Storing certificates ---")
 
 	if err := RunCmd("mkdir", "-p", PKIPath); err != nil {
@@ -520,7 +515,7 @@ func storeCerts(resp v202607.BootstrapSecretResponse) error {
 	}
 
 	if resp.CertPairs != nil {
-		saveCertPair := func(name string, pair *v202607.CertPair) error {
+		saveCertPair := func(name string, pair *v202611.CertPair) error {
 			if pair == nil {
 				return nil
 			}
@@ -549,7 +544,7 @@ func storeCerts(resp v202607.BootstrapSecretResponse) error {
 
 		for _, pair := range []struct {
 			name   string
-			cert   *v202607.CertPair
+			cert   *v202611.CertPair
 			pkiDir bool
 		}{
 			{"kubelet", resp.CertPairs.Kubelet, false},
@@ -598,14 +593,14 @@ func applySysctl() error {
 	return nil
 }
 
-func generateKubeletConfig(hostname, clusterFQDN, kubeDNSIP string) error {
+func generateKubeletConfig(hostname, clusterFQDN, kubeDNSIP string, componentConfig *v202611.ComponentConfigCollection) error {
 	slog.Info("--- Generating kubelet config ---")
 
 	if err := RunCmd("mkdir", "-p", KubeletPKIPath); err != nil {
 		return err
 	}
 
-	data := map[string]string{
+	data := map[string]any{
 		"KubeDNSIP":        kubeDNSIP,
 		"ClusterDomain":    ClusterDomain,
 		"StaticPodPath":    StaticPodPath,
@@ -614,6 +609,7 @@ func generateKubeletConfig(hostname, clusterFQDN, kubeDNSIP string) error {
 		"KubeletCertFile":  filepath.Join(KubeletPKIPath, "kubelet.crt"),
 		"KubeletKeyFile":   filepath.Join(KubeletPKIPath, "kubelet.key"),
 		"ResolvConfFile":   DetectResolvConfFile(),
+		"FeatureGates":     componentFeatureGates(componentConfig, "kubelet"),
 	}
 
 	if err := executeTemplateFromEmbed(NodeConfigs, "configassets/kubelet-config.yaml", KubeletConfigPath, data); err != nil {
@@ -676,7 +672,7 @@ func generateControllerManagerKubeconfig(clusterFQDN string) error {
 	return generateComponentKubeconfig("controller-manager", clusterFQDN)
 }
 
-func createStaticPods(podCIDR, serviceCIDR, controllerImage, schedulerImage string) error {
+func createStaticPods(podCIDR, serviceCIDR, controllerImage, schedulerImage string, componentConfig *v202611.ComponentConfigCollection) error {
 	slog.Info("--- Creating static pods ---")
 
 	if err := RunCmd("mkdir", "-p", StaticPodPath); err != nil {
@@ -695,6 +691,7 @@ func createStaticPods(podCIDR, serviceCIDR, controllerImage, schedulerImage stri
 				"serviceCIDR": serviceCIDR,
 			},
 		},
+		"FeatureGateArgLine": featureGateArgLine(componentConfig, "controller-manager"),
 	}
 
 	if err := executeTemplateFromEmbed(StaticPods, "podassets/controller-manager.yaml", filepath.Join(StaticPodPath, "controller-manager.yaml"), cmData); err != nil {
@@ -702,11 +699,13 @@ func createStaticPods(podCIDR, serviceCIDR, controllerImage, schedulerImage stri
 	}
 
 	schedData := struct {
-		Image          string
-		KubeconfigPath string
+		Image              string
+		KubeconfigPath     string
+		FeatureGateArgLine string
 	}{
-		Image:          schedulerImage,
-		KubeconfigPath: "/etc/kubernetes/scheduler.conf",
+		Image:              schedulerImage,
+		KubeconfigPath:     "/etc/kubernetes/scheduler.conf",
+		FeatureGateArgLine: featureGateArgLine(componentConfig, "scheduler"),
 	}
 
 	if err := executeTemplateFromEmbed(StaticPods, "podassets/scheduler.yaml", filepath.Join(StaticPodPath, "scheduler.yaml"), schedData); err != nil {
@@ -714,6 +713,32 @@ func createStaticPods(podCIDR, serviceCIDR, controllerImage, schedulerImage stri
 	}
 
 	return nil
+}
+
+func componentFeatureGates(componentConfig *v202611.ComponentConfigCollection, component string) map[string]bool {
+	if componentConfig == nil {
+		return nil
+	}
+	config, ok := (*componentConfig)[component]
+	if !ok || config.FeatureGates == nil {
+		return nil
+	}
+	return *config.FeatureGates
+}
+
+func featureGateArgLine(componentConfig *v202611.ComponentConfigCollection, component string) string {
+	featureGates := componentFeatureGates(componentConfig, component)
+	names := make([]string, 0, len(featureGates))
+	for name := range featureGates {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	values := make([]string, 0, len(names))
+	for _, name := range names {
+		values = append(values, fmt.Sprintf("%s=%t", name, featureGates[name]))
+	}
+	return "--feature-gates=" + strings.Join(values, ",")
 }
 
 func installBinary(name, version string, verbose bool) error {
@@ -1185,7 +1210,7 @@ func ptrMap(m map[string]string) *map[string]string {
 	return &m
 }
 
-func hostHardwareToV202607(hw *HostHardware) *v202607.HardwareInfo {
+func hostHardwareToV202607(hw *HostHardware) *v202611.HardwareInfo {
 	if hw == nil {
 		return nil
 	}
@@ -1195,12 +1220,12 @@ func hostHardwareToV202607(hw *HostHardware) *v202607.HardwareInfo {
 	memMB := int(hw.MemoryMB)
 	isVirtual := hw.IsVirtual
 
-	return &v202607.HardwareInfo{
-		Cpus: &[]v202607.CPU{{
+	return &v202611.HardwareInfo{
+		Cpus: &[]v202611.CPU{{
 			Model: &cpuModel,
 			Cores: &cores,
 		}},
-		Memory: &v202607.Memory{
+		Memory: &v202611.Memory{
 			TotalInMb: &memMB,
 		},
 		IsVirtual: &isVirtual,

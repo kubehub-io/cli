@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"os"
 
-	v202607 "github.com/kubehub-io/kubehubcli/pkg/clientlib/v202607"
+	v202611 "github.com/kubehub-io/kubehubcli/pkg/clientlib/v202611"
 )
 
 type ResetOptions struct {
@@ -82,7 +82,7 @@ func ResetNode(opts *ResetOptions) error {
 			}
 		}
 		if token != "" {
-			client, err := v202607.NewClient(opts.ServerURL)
+			client, err := v202611.NewClient(opts.ServerURL)
 			if err != nil {
 				slog.Warn(fmt.Sprintf("  warning: create client: %v", err))
 			} else {

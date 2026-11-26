@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"os"
 
-	v202607 "github.com/kubehub-io/kubehubcli/pkg/clientlib/v202607"
+	v202611 "github.com/kubehub-io/kubehubcli/pkg/clientlib/v202611"
 	"github.com/kubehub-io/kubehubcli/pkg/kubehubcli"
 	"github.com/spf13/cobra"
 )
@@ -106,7 +106,7 @@ func nodeInfoCmd(cfg *kubehubcli.Config) *cobra.Command {
 			}
 
 			if node != "" {
-				var nodeInfo v202607.Node
+				var nodeInfo v202611.Node
 				if err := json.NewDecoder(resp.Body).Decode(&nodeInfo); err != nil {
 					errorExit("decode response: %v", err)
 				}
@@ -126,7 +126,7 @@ func nodeInfoCmd(cfg *kubehubcli.Config) *cobra.Command {
 					}
 				}
 			} else {
-				var nodes []v202607.Node
+				var nodes []v202611.Node
 				if err := json.NewDecoder(resp.Body).Decode(&nodes); err != nil {
 					errorExit("decode response: %v", err)
 				}
@@ -242,7 +242,7 @@ func nodeReconcileCmd(cfg *kubehubcli.Config) *cobra.Command {
 				errorExit("%s", string(body))
 			}
 
-			var nodeInfo v202607.Node
+			var nodeInfo v202611.Node
 			if err := json.NewDecoder(resp.Body).Decode(&nodeInfo); err != nil {
 				errorExit("decode response: %v", err)
 			}
@@ -268,11 +268,11 @@ func nodeReconcileCmd(cfg *kubehubcli.Config) *cobra.Command {
 				}
 			}
 
-			nodeRequest := v202607.Node{
-				Metadata: &v202607.NodeMetadata{
+			nodeRequest := v202611.Node{
+				Metadata: &v202611.NodeMetadata{
 					Name: nodeInfo.Metadata.Name,
 				},
-				Spec: &v202607.NodeSpec{
+				Spec: &v202611.NodeSpec{
 					Os:   nodeInfo.Spec.Os,
 					Arch: nodeInfo.Spec.Arch,
 				},

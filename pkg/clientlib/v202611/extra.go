@@ -1,4 +1,4 @@
-package v202607
+package v202611
 
 // Extra fields returned by the API beyond the swagger spec.
 
