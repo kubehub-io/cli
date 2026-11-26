@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	v202611 "github.com/kubehub-io/kubehubcli/pkg/clientlib/v202611"
 	"github.com/kubehub-io/kubehubcli/pkg/kubehubcli"
 )
 
@@ -134,9 +136,11 @@ func stubReconcileHost(t *testing.T) *int {
 
 	origDetect := detectHostOnNode
 	origEnsureRunc := ensureRuncOnNode
+	origRefreshConfig := refreshConfigOnNode
 	t.Cleanup(func() {
 		detectHostOnNode = origDetect
 		ensureRuncOnNode = origEnsureRunc
+		refreshConfigOnNode = origRefreshConfig
 	})
 
 	runcCalls := 0
@@ -147,6 +151,9 @@ func stubReconcileHost(t *testing.T) *int {
 	}
 	ensureRuncOnNode = func(info *kubehubcli.HostInfo) error {
 		runcCalls++
+		return nil
+	}
+	refreshConfigOnNode = func(context.Context, *v202611.Client, v202611.RequestEditorFn, string, string, map[string]string) error {
 		return nil
 	}
 
@@ -177,7 +184,7 @@ func nodeReconcileServer(t *testing.T, putCalls *int) *httptest.Server {
 	return srv
 }
 
-func TestNodeReconcileInstallsGvisorByDefault(t *testing.T) {
+func TestNodeReconcileInstallsSoftwareByDefault(t *testing.T) {
 	withTestHome(t)
 	writeCachedToken(t)
 

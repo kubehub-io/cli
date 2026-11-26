@@ -15,6 +15,9 @@ import (
 
 func withBearerToken(token string) v202611.RequestEditorFn {
 	return func(ctx context.Context, req *http.Request) error {
+		if verbose {
+			slog.Info("API request", "method", req.Method, "url", req.URL.String())
+		}
 		req.Header.Set("Authorization", "Bearer "+token)
 		return nil
 	}
@@ -48,6 +51,10 @@ func getMapFlag(cmd *cobra.Command, name string) map[string]string {
 	vals, _ := cmd.Flags().GetStringArray(name)
 	m := make(map[string]string, len(vals))
 	for _, v := range vals {
+		if strings.HasPrefix(v, "-") && !strings.Contains(v, "=") {
+			m[v] = ""
+			continue
+		}
 		parts := strings.SplitN(v, "=", 2)
 		if len(parts) == 2 {
 			m[parts[0]] = parts[1]

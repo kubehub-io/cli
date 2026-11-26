@@ -153,6 +153,7 @@ func nodeInfoCmd(cfg *kubehubcli.Config) *cobra.Command {
 	}
 	cmd.Flags().String("cluster", "", "Cluster name (required)")
 	cmd.Flags().String("node", "", "Node name (optional, lists all if not specified)")
+	cmd.Flags().StringArray("label", nil, "Node label filter (key=value; can be repeated)")
 	cmd.MarkFlagRequired("cluster")
 	return cmd
 }
@@ -196,6 +197,7 @@ func nodeDeleteCmd(cfg *kubehubcli.Config) *cobra.Command {
 	}
 	cmd.Flags().String("cluster", "", "Cluster name (required)")
 	cmd.Flags().String("node", "", "Node name (required)")
+	cmd.Flags().StringArray("label", nil, "Node label (key=value to ensure, -key to remove; can be repeated)")
 	cmd.MarkFlagRequired("cluster")
 	cmd.MarkFlagRequired("node")
 	return cmd
@@ -206,6 +208,7 @@ var (
 	installGvisorOnHost = kubehubcli.InstallGvisor
 	detectHostOnNode    = kubehubcli.DetectHost
 	ensureRuncOnNode    = kubehubcli.EnsureRunc
+	refreshConfigOnNode = kubehubcli.RefreshNodeConfiguration
 )
 
 func nodeReconcileCmd(cfg *kubehubcli.Config) *cobra.Command {
@@ -217,6 +220,7 @@ func nodeReconcileCmd(cfg *kubehubcli.Config) *cobra.Command {
 			node, _ := cmd.Flags().GetString("node")
 			disableGvisor, _ := cmd.Flags().GetBool("disable-gvisor")
 			installGvisor := !disableGvisor
+			labelChanges := getMapFlag(cmd, "label")
 			if cluster == "" || node == "" {
 				cmd.Help()
 				os.Exit(1)
@@ -247,13 +251,10 @@ func nodeReconcileCmd(cfg *kubehubcli.Config) *cobra.Command {
 				errorExit("decode response: %v", err)
 			}
 
-			// Detect the host before applying anything so the operator can see
-			// exactly which software changes reconcile will make.
 			info, err := detectHostOnNode()
 			if err != nil {
 				errorExit("detect host: %v", err)
 			}
-
 			plan := kubehubcli.NewReconcilePlan(info, installGvisor)
 			if err := kubehubcli.ConfirmReconcilePlan(plan); err != nil {
 				errorExit("%v", err)
@@ -268,6 +269,20 @@ func nodeReconcileCmd(cfg *kubehubcli.Config) *cobra.Command {
 				}
 			}
 
+			var existingLabels map[string]string
+			if nodeInfo.Spec != nil && nodeInfo.Spec.Meta != nil && nodeInfo.Spec.Meta.Labels != nil {
+				existingLabels = *nodeInfo.Spec.Meta.Labels
+			}
+			labels := kubehubcli.MergeNodeLabels(existingLabels, labelChanges, installGvisor)
+			if err := refreshConfigOnNode(ctx, client, authHeader, cluster, node, labels); err != nil {
+				errorExit("refresh config: %v", err)
+			}
+			var nodeMeta *v202611.NodeInfo
+			if nodeInfo.Spec != nil && nodeInfo.Spec.Meta != nil {
+				nodeMeta = &v202611.NodeInfo{Ipv4: nodeInfo.Spec.Meta.Ipv4, Labels: &labels}
+			} else {
+				nodeMeta = &v202611.NodeInfo{Labels: &labels}
+			}
 			nodeRequest := v202611.Node{
 				Metadata: &v202611.NodeMetadata{
 					Name: nodeInfo.Metadata.Name,
@@ -275,6 +290,7 @@ func nodeReconcileCmd(cfg *kubehubcli.Config) *cobra.Command {
 				Spec: &v202611.NodeSpec{
 					Os:   nodeInfo.Spec.Os,
 					Arch: nodeInfo.Spec.Arch,
+					Meta: nodeMeta,
 				},
 			}
 
@@ -299,15 +315,13 @@ func nodeReconcileCmd(cfg *kubehubcli.Config) *cobra.Command {
 				errorExit("%s", string(body))
 			}
 
-			if !disableGvisor {
-				kubehubcli.GvisorRuntimeClassHint()
-			}
 			slog.Info(fmt.Sprintf("Node %s reconciled successfully", node))
 		},
 	}
 	cmd.Flags().String("cluster", "", "Cluster name (required)")
 	cmd.Flags().String("node", "", "Node name (required)")
 	cmd.Flags().Bool("disable-gvisor", false, "Do not install gVisor (runsc) on this host or register the runsc containerd runtime handler (day-2)")
+	cmd.Flags().StringArray("label", nil, "Node label (key=value to ensure, -key to remove; can be repeated)")
 	cmd.MarkFlagRequired("cluster")
 	cmd.MarkFlagRequired("node")
 	return cmd

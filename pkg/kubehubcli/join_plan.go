@@ -17,6 +17,7 @@ type JoinPlan struct {
 	Title    string
 	Network  []JoinPlanItem
 	System   []JoinPlanItem
+	Config   []JoinPlanItem
 	Software []JoinPlanItem
 }
 
@@ -32,6 +33,7 @@ func (p JoinPlan) writeTo(w io.Writer) error {
 	}{
 		{"NETWORK SETUP", p.Network},
 		{"SYSTEM SETUP", p.System},
+		{"CONFIG", p.Config},
 		{"SOFTWARE INSTALL", p.Software},
 	}
 	width := 68
@@ -212,21 +214,20 @@ func newJoinPlan(info *HostInfo, opts *JoinOptions, preflight *PreflightResult, 
 // the one-time network and kubelet setup.
 func NewReconcilePlan(info *HostInfo, installGvisor bool) JoinPlan {
 	plan := JoinPlan{Title: "NODE RECONCILE PLAN"}
-	plan.Software = append(plan.Software, runcPlanItem(info))
-
-	if installGvisor {
-		if gvisorInstalled() {
-			plan.Software = append(plan.Software, JoinPlanItem{
-				Summary:     "Refresh gVisor runtime handler (runsc)",
-				Description: "runsc is installed; rewrite the containerd runtime configuration",
-			})
-		} else {
-			plan.Software = append(plan.Software, JoinPlanItem{
-				Summary:     "Install gVisor runtime (runsc)",
-				Description: "Download runsc and register the containerd runtime handler",
-			})
-		}
+	runc := runcPlanItem(info)
+	if runc.Description != "No update needed" {
+		plan.Software = append(plan.Software, runc)
 	}
+	if installGvisor && !gvisorInstalled() {
+		plan.Software = append(plan.Software, JoinPlanItem{
+			Summary:     "Install gVisor runtime (runsc)",
+			Description: "Download runsc and register the containerd runtime handler",
+		})
+	}
+	plan.Config = append(plan.Config, JoinPlanItem{
+		Summary:     "Refresh config",
+		Description: "Apply requested node labels and update the node registration",
+	})
 
 	return plan
 }

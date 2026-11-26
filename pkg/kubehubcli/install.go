@@ -136,6 +136,27 @@ type JoinOptions struct {
 	Annotations   map[string]string
 }
 
+// MergeNodeLabels applies label changes to an existing label set. A label
+// argument beginning with "-" removes that label; all other arguments ensure
+// the label has the requested value.
+func MergeNodeLabels(existing, changes map[string]string, gvisorEnabled bool) map[string]string {
+	labels := make(map[string]string, len(existing)+len(changes)+1)
+	for key, value := range existing {
+		labels[key] = value
+	}
+	for key, value := range changes {
+		if strings.HasPrefix(key, "-") {
+			delete(labels, strings.TrimPrefix(key, "-"))
+			continue
+		}
+		labels[key] = value
+	}
+	if gvisorEnabled {
+		labels["runtime/gvisor"] = "enabled"
+	}
+	return labels
+}
+
 func JoinCluster(opts *JoinOptions) error {
 	ctx := context.Background()
 
@@ -292,7 +313,7 @@ func joinNodeToCluster(client *v202611.Client, authHeader v202611.RequestEditorF
 				Arch: &info.Arch,
 				Meta: &v202611.NodeInfo{
 					Ipv4:   &nodeIP,
-					Labels: ptrMap(opts.Labels),
+					Labels: ptrMap(MergeNodeLabels(nil, opts.Labels, opts.InstallGvisor)),
 				},
 				Annotations: ptrMap(opts.Annotations),
 				Hardware:    hostHardwareToV202607(info.Hardware),
@@ -389,7 +410,7 @@ func joinNodeToCluster(client *v202611.Client, authHeader v202611.RequestEditorF
 		return fmt.Errorf("apply sysctl: %w", err)
 	}
 
-	if err := generateKubeletConfig(hostname, ptrStr(bootstrapSecret.ClusterDNS), kubeDNSDefaultIP, bootstrapSecret.ComponentConfig); err != nil {
+	if _, err := generateKubeletConfig(hostname, ptrStr(bootstrapSecret.ClusterDNS), kubeDNSDefaultIP, bootstrapSecret.ComponentConfig); err != nil {
 		return fmt.Errorf("generate kubelet config: %w", err)
 	}
 
@@ -451,7 +472,7 @@ func joinNodeToCluster(client *v202611.Client, authHeader v202611.RequestEditorF
 		return fmt.Errorf("install kubectl: %w", err)
 	}
 
-	if err := enableKubelet(); err != nil {
+	if err := enableKubelet(MergeNodeLabels(nil, opts.Labels, opts.InstallGvisor)); err != nil {
 		return fmt.Errorf("enable kubelet: %w", err)
 	}
 
@@ -465,9 +486,11 @@ func joinNodeToCluster(client *v202611.Client, authHeader v202611.RequestEditorF
 
 func resolveClusterComponentVersion(clusterInfo *v202611.Cluster) string {
 	if clusterInfo.Status != nil && clusterInfo.Status.ControlPlaneComponents != nil {
-		apiSrv, ok := (*clusterInfo.Status.ControlPlaneComponents)["kubeApiserver"]
-		if ok && apiSrv.Version != nil && *apiSrv.Version != "" {
-			return *apiSrv.Version
+		for _, name := range []string{"kubeApiserver", "kube-apiserver", "kube_apiserver"} {
+			apiSrv, ok := (*clusterInfo.Status.ControlPlaneComponents)[name]
+			if ok && apiSrv.Version != nil && *apiSrv.Version != "" {
+				return *apiSrv.Version
+			}
 		}
 	}
 	return ""
@@ -593,11 +616,11 @@ func applySysctl() error {
 	return nil
 }
 
-func generateKubeletConfig(hostname, clusterFQDN, kubeDNSIP string, componentConfig *v202611.ComponentConfigCollection) error {
+func generateKubeletConfig(hostname, clusterFQDN, kubeDNSIP string, componentConfig *v202611.ComponentConfigCollection) (bool, error) {
 	slog.Info("--- Generating kubelet config ---")
 
 	if err := RunCmd("mkdir", "-p", KubeletPKIPath); err != nil {
-		return err
+		return false, err
 	}
 
 	data := map[string]any{
@@ -612,8 +635,13 @@ func generateKubeletConfig(hostname, clusterFQDN, kubeDNSIP string, componentCon
 		"FeatureGates":     componentFeatureGates(componentConfig, "kubelet"),
 	}
 
-	if err := executeTemplateFromEmbed(NodeConfigs, "configassets/kubelet-config.yaml", KubeletConfigPath, data); err != nil {
-		return fmt.Errorf("write kubelet.conf: %w", err)
+	rendered, err := renderTemplateFromEmbed(NodeConfigs, "configassets/kubelet-config.yaml", data)
+	if err != nil {
+		return false, fmt.Errorf("render kubelet.conf: %w", err)
+	}
+	changed, err := writeFileAsRootIfChanged(KubeletConfigPath, rendered, 0644)
+	if err != nil {
+		return false, fmt.Errorf("write kubelet.conf: %w", err)
 	}
 
 	kubeconfigData := struct {
@@ -631,10 +659,10 @@ func generateKubeletConfig(hostname, clusterFQDN, kubeDNSIP string, componentCon
 	}
 
 	if err := executeTemplateFromEmbed(NodeConfigs, "configassets/kubelet.kubeconfig", KubeletKubeconfigPath, kubeconfigData); err != nil {
-		return fmt.Errorf("write kubelet.kubeconfig: %w", err)
+		return false, fmt.Errorf("write kubelet.kubeconfig: %w", err)
 	}
 
-	return nil
+	return changed, nil
 }
 
 func generateComponentKubeconfig(name, clusterFQDN string) error {
@@ -713,6 +741,94 @@ func createStaticPods(podCIDR, serviceCIDR, controllerImage, schedulerImage stri
 	}
 
 	return nil
+}
+
+// RefreshNodeConfiguration regenerates node-local kubelet and control-plane
+// configuration from the current cluster bootstrap data.
+func RefreshNodeConfiguration(ctx context.Context, client *v202611.Client, authHeader v202611.RequestEditorFn, clusterName, nodeName string, labels map[string]string) error {
+	clusterResp, err := client.GetCluster(ctx, clusterName, authHeader)
+	if err != nil {
+		return fmt.Errorf("get cluster for config refresh: %w", err)
+	}
+	if clusterResp.StatusCode != http.StatusOK {
+		errMsg := v202611.ParseErrorResponse(clusterResp)
+		clusterResp.Body.Close()
+		return fmt.Errorf("get cluster for config refresh failed: %s", errMsg)
+	}
+	var clusterInfo v202611.Cluster
+	if err := json.NewDecoder(clusterResp.Body).Decode(&clusterInfo); err != nil {
+		clusterResp.Body.Close()
+		return fmt.Errorf("decode cluster for config refresh: %w", err)
+	}
+	clusterResp.Body.Close()
+
+	bootstrapResp, err := client.BootstrapNode(ctx, clusterName, nodeName, authHeader)
+	if err != nil {
+		return fmt.Errorf("bootstrap node for config refresh: %w", err)
+	}
+	if bootstrapResp.StatusCode != http.StatusOK {
+		errMsg := v202611.ParseErrorResponse(bootstrapResp)
+		bootstrapResp.Body.Close()
+		return fmt.Errorf("bootstrap node for config refresh failed: %s", errMsg)
+	}
+	var bootstrapSecret v202611.BootstrapSecretResponse
+	if err := json.NewDecoder(bootstrapResp.Body).Decode(&bootstrapSecret); err != nil {
+		bootstrapResp.Body.Close()
+		return fmt.Errorf("decode bootstrap data for config refresh: %w", err)
+	}
+	bootstrapResp.Body.Close()
+
+	if err := storeCerts(bootstrapSecret); err != nil {
+		return fmt.Errorf("store refreshed certs: %w", err)
+	}
+
+	podCIDR, serviceCIDR, kubeDNSIP := resolveClusterCIDRs(&clusterInfo)
+	componentVersion := resolveClusterComponentVersion(&clusterInfo)
+	if componentVersion == "" {
+		return fmt.Errorf("cluster component version is unavailable")
+	}
+	controllerImage := fmt.Sprintf("registry.k8s.io/kube-controller-manager:%s", componentVersion)
+	schedulerImage := fmt.Sprintf("registry.k8s.io/kube-scheduler:%s", componentVersion)
+
+	kubeletChanged, err := generateKubeletConfig(nodeName, ptrStr(bootstrapSecret.ClusterDNS), kubeDNSIP, bootstrapSecret.ComponentConfig)
+	if err != nil {
+		return fmt.Errorf("refresh kubelet config: %w", err)
+	}
+	if err := generateSchedulerKubeconfig(ptrStr(bootstrapSecret.ClusterDNS)); err != nil {
+		return fmt.Errorf("refresh scheduler kubeconfig: %w", err)
+	}
+	if err := generateControllerManagerKubeconfig(ptrStr(bootstrapSecret.ClusterDNS)); err != nil {
+		return fmt.Errorf("refresh controller-manager kubeconfig: %w", err)
+	}
+	if err := createStaticPods(podCIDR, serviceCIDR, controllerImage, schedulerImage, bootstrapSecret.ComponentConfig); err != nil {
+		return fmt.Errorf("refresh static pods: %w", err)
+	}
+	serviceChanged, err := writeKubeletService(labels)
+	if err != nil {
+		return fmt.Errorf("refresh kubelet service: %w", err)
+	}
+	if serviceChanged {
+		if err := RunCmdCapture("systemctl", "daemon-reload"); err != nil {
+			return fmt.Errorf("reload systemd after kubelet service change: %w", err)
+		}
+	}
+	if kubeletChanged || serviceChanged {
+		slog.Info("kubelet config changed; restarting kubelet")
+		if err := RunCmdCapture("systemctl", "restart", "kubelet"); err != nil {
+			return fmt.Errorf("restart kubelet: %w", err)
+		}
+	}
+	return nil
+}
+
+func writeKubeletService(labels map[string]string) (bool, error) {
+	rendered, err := renderTemplateFromEmbed(NodeConfigs, "configassets/kubelet.service", map[string]string{
+		"NodeLabels": renderNodeLabels(labels),
+	})
+	if err != nil {
+		return false, err
+	}
+	return writeFileAsRootIfChanged("/etc/systemd/system/kubelet.service", rendered, 0644)
 }
 
 func componentFeatureGates(componentConfig *v202611.ComponentConfigCollection, component string) map[string]bool {
@@ -1127,12 +1243,14 @@ func installCrictl() error {
 	return nil
 }
 
-func enableKubelet() error {
+func enableKubelet(labels map[string]string) error {
 	slog.Info("--- Enabling and starting kubelet ---")
 
-	data, err := NodeConfigs.ReadFile("configassets/kubelet.service")
+	data, err := renderTemplateFromEmbed(NodeConfigs, "configassets/kubelet.service", map[string]string{
+		"NodeLabels": renderNodeLabels(labels),
+	})
 	if err != nil {
-		return fmt.Errorf("read kubelet.service: %w", err)
+		return fmt.Errorf("render kubelet.service: %w", err)
 	}
 
 	if err := writeFileAsRoot("/etc/systemd/system/kubelet.service", data, 0644); err != nil {
@@ -1154,23 +1272,54 @@ func enableKubelet() error {
 	return nil
 }
 
+func renderNodeLabels(labels map[string]string) string {
+	names := make([]string, 0, len(labels))
+	for name := range labels {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	values := make([]string, 0, len(names))
+	for _, name := range names {
+		values = append(values, name+"="+labels[name])
+	}
+	return strings.Join(values, ",")
+}
+
 func executeTemplateFromEmbed(fsys any, templatePath, outputPath string, data interface{}) error {
+	rendered, err := renderTemplateFromEmbed(fsys, templatePath, data)
+	if err != nil {
+		return err
+	}
+	return writeFileAsRoot(outputPath, rendered, 0644)
+}
+
+func renderTemplateFromEmbed(fsys any, templatePath string, data interface{}) ([]byte, error) {
 	tmplData, err := fsys.(interface{ ReadFile(string) ([]byte, error) }).ReadFile(templatePath)
 	if err != nil {
-		return fmt.Errorf("read template %s: %w", templatePath, err)
+		return nil, fmt.Errorf("read template %s: %w", templatePath, err)
 	}
 
 	tmpl, err := template.New("").Parse(string(tmplData))
 	if err != nil {
-		return fmt.Errorf("parse template: %w", err)
+		return nil, fmt.Errorf("parse template: %w", err)
 	}
 
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, data); err != nil {
-		return fmt.Errorf("execute template: %w", err)
+		return nil, fmt.Errorf("execute template: %w", err)
 	}
 
-	return writeFileAsRoot(outputPath, buf.Bytes(), 0644)
+	return buf.Bytes(), nil
+}
+
+func writeFileAsRootIfChanged(path string, data []byte, mode os.FileMode) (bool, error) {
+	if existing, err := os.ReadFile(path); err == nil && bytes.Equal(existing, data) {
+		return false, nil
+	}
+	if err := writeFileAsRoot(path, data, mode); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func ptrStr(s *string) string {

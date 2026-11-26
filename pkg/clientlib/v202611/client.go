@@ -373,7 +373,7 @@ type ClientOption func(*Client) error
 func NewClient(server string, opts ...ClientOption) (*Client, error) {
 	// create a client with sane default values
 	client := Client{
-		Server: server,
+		Server: normalizeAPIServer(server),
 	}
 	// mutate client and add all optional params
 	for _, o := range opts {
