@@ -9,9 +9,13 @@ const (
 	CNIBinPath            = "/opt/cni/bin"
 	KubeletConfigPath     = "/var/lib/kubelet/config.yaml"
 	KubeletKubeconfigPath = "/var/lib/kubelet/kubeconfig"
-	PKIPath               = "/etc/kubernetes/pki"
-	KubeletPKIPath        = "/var/lib/kubelet/pki"
-	ContainerdConfigPath  = "/etc/containerd/config.toml"
+	KubeletServicePath    = "/etc/systemd/system/kubelet.service"
+	// KubeletServiceDropInPath sorts after package-managed kubeadm/kind
+	// drop-ins so kubehubcli's ExecStart always wins.
+	KubeletServiceDropInPath = "/etc/systemd/system/kubelet.service.d/99-kubehubcli.conf"
+	PKIPath                  = "/etc/kubernetes/pki"
+	KubeletPKIPath           = "/var/lib/kubelet/pki"
+	ContainerdConfigPath     = "/etc/containerd/config.toml"
 
 	ContainerdConfigBackupPath = ContainerdConfigPath + ".kubehubcli.bak"
 

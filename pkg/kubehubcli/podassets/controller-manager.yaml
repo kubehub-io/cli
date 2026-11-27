@@ -20,7 +20,8 @@ spec:
         - --cluster-cidr={{.cluster.network.podCIDR}}
         - --service-cluster-ip-range={{.cluster.network.serviceCIDR}}
         - --controllers=*,bootstrapsigner,tokencleaner,-certificatesigningrequest-approving-controller,-certificatesigningrequest-cleaner-controller,-certificatesigningrequest-signing-controller
-        - --leader-elect=false
+        - --leader-elect=true
+        - {{.FeatureGateArgLine}}
       volumeMounts:
         - name: pki
           mountPath: /etc/kubernetes/pki

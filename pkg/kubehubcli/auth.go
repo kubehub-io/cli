@@ -382,7 +382,7 @@ func (t *loggingRoundTripper) RoundTrip(req *http.Request) (*http.Response, erro
 			body, _ := io.ReadAll(req.Body)
 			req.Body.Close()
 			if len(body) > 0 {
-				slog.Info(fmt.Sprintf(">>> body: %s", string(body)))
+				slog.Info(fmt.Sprintf(">>> body: %s", redactRequestBody(req, body)))
 			}
 			req.Body = io.NopCloser(bytes.NewReader(body))
 		}
@@ -402,12 +402,65 @@ func (t *loggingRoundTripper) RoundTrip(req *http.Request) (*http.Response, erro
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		if len(respBody) > 0 {
-			slog.Info(fmt.Sprintf("<<< body: %s", string(respBody)))
+			slog.Info(fmt.Sprintf("<<< body: %s", redactJSONBody(respBody)))
 		}
 		resp.Body = io.NopCloser(bytes.NewReader(respBody))
 	}
 
 	return resp, nil
+}
+
+func redactRequestBody(req *http.Request, body []byte) string {
+	if strings.HasPrefix(strings.ToLower(req.Header.Get("Content-Type")), "application/x-www-form-urlencoded") {
+		values, err := url.ParseQuery(string(body))
+		if err == nil {
+			for key := range values {
+				if isSensitiveTokenField(key) {
+					values.Set(key, "[REDACTED]")
+				}
+			}
+			return values.Encode()
+		}
+	}
+	return redactJSONBody(body)
+}
+
+func redactJSONBody(body []byte) string {
+	var value any
+	if err := json.Unmarshal(body, &value); err != nil {
+		return "[REDACTED]"
+	}
+	redactJSONValue(value)
+	redacted, err := json.Marshal(value)
+	if err != nil {
+		return "[REDACTED]"
+	}
+	return string(redacted)
+}
+
+func redactJSONValue(value any) {
+	switch value := value.(type) {
+	case map[string]any:
+		for key, child := range value {
+			if isSensitiveTokenField(key) {
+				value[key] = "[REDACTED]"
+				continue
+			}
+			redactJSONValue(child)
+		}
+	case []any:
+		for _, child := range value {
+			redactJSONValue(child)
+		}
+	}
+}
+
+func isSensitiveTokenField(key string) bool {
+	key = strings.ToLower(strings.ReplaceAll(key, "-", "_"))
+	return strings.Contains(key, "token") ||
+		strings.Contains(key, "secret") ||
+		strings.Contains(key, "password") ||
+		key == "authorization"
 }
 
 func randomString(length int) (string, error) {

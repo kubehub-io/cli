@@ -37,9 +37,9 @@ func TestJoinPlanWriteToFormatsSectionsAndWrapsText(t *testing.T) {
 	}
 }
 
-func TestNewReconcilePlanDescribesRuncAndGvisor(t *testing.T) {
+func TestNewReconcilePlanIncludesNeededSoftware(t *testing.T) {
 	info := &HostInfo{Runc: &BinaryInfo{Version: "runc version 1.1.0"}}
-	plan := NewReconcilePlan(info, true)
+	plan := NewReconcilePlan(info, false)
 
 	var output strings.Builder
 	require.NoError(t, plan.writeTo(&output))
@@ -47,10 +47,10 @@ func TestNewReconcilePlanDescribesRuncAndGvisor(t *testing.T) {
 
 	require.Contains(t, text, "NODE RECONCILE PLAN")
 	require.Contains(t, text, "Update runc from 1.1.0 to "+RuncVersion)
-	require.Contains(t, text, "gVisor")
+	require.Contains(t, text, "Refresh config")
 }
 
-func TestNewReconcilePlanSkipsCurrentRuncAndGvisor(t *testing.T) {
+func TestNewReconcilePlanOmitsSatisfiedSoftware(t *testing.T) {
 	info := &HostInfo{Runc: &BinaryInfo{Version: "runc version " + RuncVersion}}
 	plan := NewReconcilePlan(info, false)
 
@@ -58,7 +58,8 @@ func TestNewReconcilePlanSkipsCurrentRuncAndGvisor(t *testing.T) {
 	require.NoError(t, plan.writeTo(&output))
 	text := output.String()
 
-	require.Contains(t, text, "runc "+RuncVersion+" already installed")
+	require.NotContains(t, text, "SOFTWARE INSTALL")
+	require.NotContains(t, text, "runc")
 	require.NotContains(t, text, "gVisor")
 	require.NotContains(t, text, "NETWORK SETUP")
 }

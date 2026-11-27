@@ -9,7 +9,7 @@ import (
 	"os"
 	"time"
 
-	v202607 "github.com/kubehub-io/kubehubcli/pkg/clientlib/v202607"
+	v202611 "github.com/kubehub-io/kubehubcli/pkg/clientlib/v202611"
 	"github.com/kubehub-io/kubehubcli/pkg/kubehubcli"
 	"github.com/spf13/cobra"
 )
@@ -50,9 +50,9 @@ func setupCmd(cfg *kubehubcli.Config) *cobra.Command {
 			slog.Info(fmt.Sprintf("Name: %s", cluster))
 			slog.Info(fmt.Sprintf("Region: %s", region))
 
-			clusterReq := v202607.ClusterRequest{
-				Metadata: &v202607.ClusterMetadata{Name: &cluster},
-				Spec:     &v202607.ClusterSpec{Region: &region},
+			clusterReq := v202611.ClusterRequest{
+				Metadata: &v202611.ClusterMetadata{Name: &cluster},
+				Spec:     &v202611.ClusterSpec{Region: &region},
 			}
 
 			createResp, err := client.CreateCluster(ctx, clusterReq, authHeader)
@@ -61,7 +61,7 @@ func setupCmd(cfg *kubehubcli.Config) *cobra.Command {
 			}
 
 			if createResp.StatusCode != http.StatusOK && createResp.StatusCode != http.StatusCreated {
-				errMsg := v202607.ParseErrorResponse(createResp)
+				errMsg := v202611.ParseErrorResponse(createResp)
 				createResp.Body.Close()
 				errorExit("create cluster: %s", errMsg)
 			}
@@ -70,7 +70,7 @@ func setupCmd(cfg *kubehubcli.Config) *cobra.Command {
 			slog.Info("Cluster created successfully!")
 
 			slog.Info("Waiting for cluster to be ready...")
-			var clusterInfo v202607.Cluster
+			var clusterInfo v202611.Cluster
 			clusterReady := false
 			deadline := time.Now().Add(10 * time.Minute)
 			for time.Now().Before(deadline) {
@@ -116,9 +116,9 @@ func setupCmd(cfg *kubehubcli.Config) *cobra.Command {
 						slog.Info(fmt.Sprintf("  PodCIDR: %s -> %s", defaultPodCIDR, podCIDR))
 						slog.Info(fmt.Sprintf("  ServiceCIDR: %s -> %s", defaultSvcCIDR, svcCIDR))
 
-						updateReq := v202607.ClusterRequest{
-							Spec: &v202607.ClusterSpec{
-								Network: &v202607.Network{
+						updateReq := v202611.ClusterRequest{
+							Spec: &v202611.ClusterSpec{
+								Network: &v202611.Network{
 									PodCIDR:          &podCIDR,
 									ServiceCIDR:      &svcCIDR,
 									KubeDNSServiceIP: &dnsIP,
@@ -130,7 +130,7 @@ func setupCmd(cfg *kubehubcli.Config) *cobra.Command {
 							errorExit("update cluster network: %v", err)
 						}
 						if updateResp.StatusCode != http.StatusOK && updateResp.StatusCode != http.StatusNoContent {
-							errMsg := v202607.ParseErrorResponse(updateResp)
+							errMsg := v202611.ParseErrorResponse(updateResp)
 							updateResp.Body.Close()
 							errorExit("update cluster network: %s", errMsg)
 						}

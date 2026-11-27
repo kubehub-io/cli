@@ -14,13 +14,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"text/template"
 	"time"
 
 	"github.com/gogrlx/snack"
 	"github.com/gogrlx/snack/detect"
-	v202607 "github.com/kubehub-io/kubehubcli/pkg/clientlib/v202607"
+	v202611 "github.com/kubehub-io/kubehubcli/pkg/clientlib/v202611"
 	"golang.org/x/mod/semver"
 )
 
@@ -135,6 +136,27 @@ type JoinOptions struct {
 	Annotations   map[string]string
 }
 
+// MergeNodeLabels applies label changes to an existing label set. A label
+// argument beginning with "-" removes that label; all other arguments ensure
+// the label has the requested value.
+func MergeNodeLabels(existing, changes map[string]string, gvisorEnabled bool) map[string]string {
+	labels := make(map[string]string, len(existing)+len(changes)+1)
+	for key, value := range existing {
+		labels[key] = value
+	}
+	for key, value := range changes {
+		if strings.HasPrefix(key, "-") {
+			delete(labels, strings.TrimPrefix(key, "-"))
+			continue
+		}
+		labels[key] = value
+	}
+	if gvisorEnabled {
+		labels["runtime/gvisor"] = "enabled"
+	}
+	return labels
+}
+
 func JoinCluster(opts *JoinOptions) error {
 	ctx := context.Background()
 
@@ -148,7 +170,7 @@ func JoinCluster(opts *JoinOptions) error {
 		}
 	}
 
-	client, err := v202607.NewClient(opts.ServerURL)
+	client, err := v202611.NewClient(opts.ServerURL)
 	if err != nil {
 		return fmt.Errorf("create client: %w", err)
 	}
@@ -164,11 +186,11 @@ func JoinCluster(opts *JoinOptions) error {
 		return fmt.Errorf("get cluster: %w", err)
 	}
 	if clusterResp.StatusCode != http.StatusOK {
-		errMsg := v202607.ParseErrorResponse(clusterResp)
+		errMsg := v202611.ParseErrorResponse(clusterResp)
 		clusterResp.Body.Close()
 		return fmt.Errorf("cluster %s not found: %s", opts.ClusterName, errMsg)
 	}
-	var clusterInfo v202607.Cluster
+	var clusterInfo v202611.Cluster
 	if err := json.NewDecoder(clusterResp.Body).Decode(&clusterInfo); err != nil {
 		clusterResp.Body.Close()
 		return fmt.Errorf("decode cluster response: %w", err)
@@ -179,7 +201,7 @@ func JoinCluster(opts *JoinOptions) error {
 	return joinNodeToCluster(client, authHeader, opts, &clusterInfo)
 }
 
-func JoinClusterWithCluster(opts *JoinOptions, clusterInfo *v202607.Cluster) error {
+func JoinClusterWithCluster(opts *JoinOptions, clusterInfo *v202611.Cluster) error {
 	token := opts.Token
 	if token == "" {
 		auth := NewAuthenticator(opts.OIDCIssuerURL, opts.OIDCClientID).WithVerbose(opts.Verbose).WithDeviceMode(opts.DeviceMode)
@@ -190,7 +212,7 @@ func JoinClusterWithCluster(opts *JoinOptions, clusterInfo *v202607.Cluster) err
 		}
 	}
 
-	client, err := v202607.NewClient(opts.ServerURL)
+	client, err := v202611.NewClient(opts.ServerURL)
 	if err != nil {
 		return fmt.Errorf("create client: %w", err)
 	}
@@ -203,7 +225,7 @@ func JoinClusterWithCluster(opts *JoinOptions, clusterInfo *v202607.Cluster) err
 	return joinNodeToCluster(client, authHeader, opts, clusterInfo)
 }
 
-func joinNodeToCluster(client *v202607.Client, authHeader v202607.RequestEditorFn, opts *JoinOptions, clusterInfo *v202607.Cluster) error {
+func joinNodeToCluster(client *v202611.Client, authHeader v202611.RequestEditorFn, opts *JoinOptions, clusterInfo *v202611.Cluster) error {
 	slog.Info("=== Joining Cluster ===")
 	slog.Info(fmt.Sprintf("Cluster: %s", opts.ClusterName))
 
@@ -262,7 +284,7 @@ func joinNodeToCluster(client *v202607.Client, authHeader v202607.RequestEditorF
 	}
 
 	if getResp.StatusCode == http.StatusOK {
-		var existingNode v202607.Node
+		var existingNode v202611.Node
 		if err := json.NewDecoder(getResp.Body).Decode(&existingNode); err != nil {
 			getResp.Body.Close()
 			return fmt.Errorf("decode existing node: %w", err)
@@ -282,16 +304,16 @@ func joinNodeToCluster(client *v202607.Client, authHeader v202607.RequestEditorF
 	} else if getResp.StatusCode == http.StatusNotFound {
 		getResp.Body.Close()
 
-		nodeReq := v202607.Node{
-			Metadata: &v202607.NodeMetadata{
+		nodeReq := v202611.Node{
+			Metadata: &v202611.NodeMetadata{
 				Name: &hostname,
 			},
-			Spec: &v202607.NodeSpec{
+			Spec: &v202611.NodeSpec{
 				Os:   &info.OS,
 				Arch: &info.Arch,
-				Meta: &v202607.NodeInfo{
+				Meta: &v202611.NodeInfo{
 					Ipv4:   &nodeIP,
-					Labels: ptrMap(opts.Labels),
+					Labels: ptrMap(MergeNodeLabels(nil, opts.Labels, opts.InstallGvisor)),
 				},
 				Annotations: ptrMap(opts.Annotations),
 				Hardware:    hostHardwareToV202607(info.Hardware),
@@ -304,7 +326,7 @@ func joinNodeToCluster(client *v202607.Client, authHeader v202607.RequestEditorF
 		}
 
 		if createResp.StatusCode != http.StatusOK {
-			errMsg := v202607.ParseErrorResponse(createResp)
+			errMsg := v202611.ParseErrorResponse(createResp)
 			createResp.Body.Close()
 			return fmt.Errorf("create node failed: %s", errMsg)
 		}
@@ -312,12 +334,12 @@ func joinNodeToCluster(client *v202607.Client, authHeader v202607.RequestEditorF
 
 		slog.Info("Node created successfully!")
 	} else {
-		errMsg := v202607.ParseErrorResponse(getResp)
+		errMsg := v202611.ParseErrorResponse(getResp)
 		getResp.Body.Close()
 		return fmt.Errorf("get node failed: %s", errMsg)
 	}
 
-	var bootstrapSecret v202607.BootstrapSecretResponse
+	var bootstrapSecret v202611.BootstrapSecretResponse
 	{
 		const maxAttempts = 30
 		var lastErr error
@@ -341,7 +363,7 @@ func joinNodeToCluster(client *v202607.Client, authHeader v202607.RequestEditorF
 
 			if bootstrapResp.StatusCode != http.StatusOK {
 				bootstrapResp.Body.Close()
-				lastErr = fmt.Errorf("bootstrap failed: %s", v202607.ParseErrorResponse(bootstrapResp))
+				lastErr = fmt.Errorf("bootstrap failed: %s", v202611.ParseErrorResponse(bootstrapResp))
 				continue
 			}
 
@@ -388,7 +410,7 @@ func joinNodeToCluster(client *v202607.Client, authHeader v202607.RequestEditorF
 		return fmt.Errorf("apply sysctl: %w", err)
 	}
 
-	if err := generateKubeletConfig(hostname, ptrStr(bootstrapSecret.ClusterDNS), kubeDNSDefaultIP); err != nil {
+	if _, err := generateKubeletConfig(hostname, ptrStr(bootstrapSecret.ClusterDNS), kubeDNSDefaultIP, bootstrapSecret.ComponentConfig); err != nil {
 		return fmt.Errorf("generate kubelet config: %w", err)
 	}
 
@@ -400,7 +422,7 @@ func joinNodeToCluster(client *v202607.Client, authHeader v202607.RequestEditorF
 		return fmt.Errorf("generate controller-manager kubeconfig: %w", err)
 	}
 
-	if err := createStaticPods(podCIDR, serviceCIDR, controllerImage, schedulerImage); err != nil {
+	if err := createStaticPods(podCIDR, serviceCIDR, controllerImage, schedulerImage, bootstrapSecret.ComponentConfig); err != nil {
 		return fmt.Errorf("create static pods: %w", err)
 	}
 
@@ -450,7 +472,7 @@ func joinNodeToCluster(client *v202607.Client, authHeader v202607.RequestEditorF
 		return fmt.Errorf("install kubectl: %w", err)
 	}
 
-	if err := enableKubelet(); err != nil {
+	if err := enableKubelet(MergeNodeLabels(nil, opts.Labels, opts.InstallGvisor)); err != nil {
 		return fmt.Errorf("enable kubelet: %w", err)
 	}
 
@@ -462,23 +484,19 @@ func joinNodeToCluster(client *v202607.Client, authHeader v202607.RequestEditorF
 	return nil
 }
 
-func resolveClusterComponentVersion(clusterInfo *v202607.Cluster) string {
-	if clusterInfo.Status != nil && clusterInfo.Status.ControlPlane != nil && clusterInfo.Status.ControlPlane.Components != nil {
-		apiSrv := clusterInfo.Status.ControlPlane.Components.KubeApiserver
-		if apiSrv != nil && apiSrv.Version != nil && *apiSrv.Version != "" {
-			return *apiSrv.Version
-		}
-	}
+func resolveClusterComponentVersion(clusterInfo *v202611.Cluster) string {
 	if clusterInfo.Status != nil && clusterInfo.Status.ControlPlaneComponents != nil {
-		apiSrv := clusterInfo.Status.ControlPlaneComponents.KubeApiserver
-		if apiSrv != nil && apiSrv.Version != nil && *apiSrv.Version != "" {
-			return *apiSrv.Version
+		for _, name := range []string{"kubeApiserver", "kube-apiserver", "kube_apiserver"} {
+			apiSrv, ok := (*clusterInfo.Status.ControlPlaneComponents)[name]
+			if ok && apiSrv.Version != nil && *apiSrv.Version != "" {
+				return *apiSrv.Version
+			}
 		}
 	}
 	return ""
 }
 
-func resolveClusterCIDRs(clusterInfo *v202607.Cluster) (podCIDR, svcCIDR, dnsIP string) {
+func resolveClusterCIDRs(clusterInfo *v202611.Cluster) (podCIDR, svcCIDR, dnsIP string) {
 	podCIDR = "10.10.0.0/16"
 	svcCIDR = "10.20.0.0/16"
 	dnsIP = "10.20.0.10"
@@ -496,7 +514,7 @@ func resolveClusterCIDRs(clusterInfo *v202607.Cluster) (podCIDR, svcCIDR, dnsIP 
 	return
 }
 
-func storeCerts(resp v202607.BootstrapSecretResponse) error {
+func storeCerts(resp v202611.BootstrapSecretResponse) error {
 	slog.Info("--- Storing certificates ---")
 
 	if err := RunCmd("mkdir", "-p", PKIPath); err != nil {
@@ -520,7 +538,7 @@ func storeCerts(resp v202607.BootstrapSecretResponse) error {
 	}
 
 	if resp.CertPairs != nil {
-		saveCertPair := func(name string, pair *v202607.CertPair) error {
+		saveCertPair := func(name string, pair *v202611.CertPair) error {
 			if pair == nil {
 				return nil
 			}
@@ -549,7 +567,7 @@ func storeCerts(resp v202607.BootstrapSecretResponse) error {
 
 		for _, pair := range []struct {
 			name   string
-			cert   *v202607.CertPair
+			cert   *v202611.CertPair
 			pkiDir bool
 		}{
 			{"kubelet", resp.CertPairs.Kubelet, false},
@@ -598,14 +616,14 @@ func applySysctl() error {
 	return nil
 }
 
-func generateKubeletConfig(hostname, clusterFQDN, kubeDNSIP string) error {
+func generateKubeletConfig(hostname, clusterFQDN, kubeDNSIP string, componentConfig *v202611.ComponentConfigCollection) (bool, error) {
 	slog.Info("--- Generating kubelet config ---")
 
 	if err := RunCmd("mkdir", "-p", KubeletPKIPath); err != nil {
-		return err
+		return false, err
 	}
 
-	data := map[string]string{
+	data := map[string]any{
 		"KubeDNSIP":        kubeDNSIP,
 		"ClusterDomain":    ClusterDomain,
 		"StaticPodPath":    StaticPodPath,
@@ -614,10 +632,16 @@ func generateKubeletConfig(hostname, clusterFQDN, kubeDNSIP string) error {
 		"KubeletCertFile":  filepath.Join(KubeletPKIPath, "kubelet.crt"),
 		"KubeletKeyFile":   filepath.Join(KubeletPKIPath, "kubelet.key"),
 		"ResolvConfFile":   DetectResolvConfFile(),
+		"FeatureGates":     componentFeatureGates(componentConfig, "kubelet"),
 	}
 
-	if err := executeTemplateFromEmbed(NodeConfigs, "configassets/kubelet-config.yaml", KubeletConfigPath, data); err != nil {
-		return fmt.Errorf("write kubelet.conf: %w", err)
+	rendered, err := renderTemplateFromEmbed(NodeConfigs, "configassets/kubelet-config.yaml", data)
+	if err != nil {
+		return false, fmt.Errorf("render kubelet.conf: %w", err)
+	}
+	changed, err := writeFileAsRootIfChangedWithBackup(KubeletConfigPath, rendered, 0644, true)
+	if err != nil {
+		return false, fmt.Errorf("write kubelet.conf: %w", err)
 	}
 
 	kubeconfigData := struct {
@@ -635,10 +659,10 @@ func generateKubeletConfig(hostname, clusterFQDN, kubeDNSIP string) error {
 	}
 
 	if err := executeTemplateFromEmbed(NodeConfigs, "configassets/kubelet.kubeconfig", KubeletKubeconfigPath, kubeconfigData); err != nil {
-		return fmt.Errorf("write kubelet.kubeconfig: %w", err)
+		return false, fmt.Errorf("write kubelet.kubeconfig: %w", err)
 	}
 
-	return nil
+	return changed, nil
 }
 
 func generateComponentKubeconfig(name, clusterFQDN string) error {
@@ -676,7 +700,7 @@ func generateControllerManagerKubeconfig(clusterFQDN string) error {
 	return generateComponentKubeconfig("controller-manager", clusterFQDN)
 }
 
-func createStaticPods(podCIDR, serviceCIDR, controllerImage, schedulerImage string) error {
+func createStaticPods(podCIDR, serviceCIDR, controllerImage, schedulerImage string, componentConfig *v202611.ComponentConfigCollection) error {
 	slog.Info("--- Creating static pods ---")
 
 	if err := RunCmd("mkdir", "-p", StaticPodPath); err != nil {
@@ -695,6 +719,7 @@ func createStaticPods(podCIDR, serviceCIDR, controllerImage, schedulerImage stri
 				"serviceCIDR": serviceCIDR,
 			},
 		},
+		"FeatureGateArgLine": featureGateArgLine(componentConfig, "controller-manager"),
 	}
 
 	if err := executeTemplateFromEmbed(StaticPods, "podassets/controller-manager.yaml", filepath.Join(StaticPodPath, "controller-manager.yaml"), cmData); err != nil {
@@ -702,11 +727,13 @@ func createStaticPods(podCIDR, serviceCIDR, controllerImage, schedulerImage stri
 	}
 
 	schedData := struct {
-		Image          string
-		KubeconfigPath string
+		Image              string
+		KubeconfigPath     string
+		FeatureGateArgLine string
 	}{
-		Image:          schedulerImage,
-		KubeconfigPath: "/etc/kubernetes/scheduler.conf",
+		Image:              schedulerImage,
+		KubeconfigPath:     "/etc/kubernetes/scheduler.conf",
+		FeatureGateArgLine: featureGateArgLine(componentConfig, "scheduler"),
 	}
 
 	if err := executeTemplateFromEmbed(StaticPods, "podassets/scheduler.yaml", filepath.Join(StaticPodPath, "scheduler.yaml"), schedData); err != nil {
@@ -714,6 +741,161 @@ func createStaticPods(podCIDR, serviceCIDR, controllerImage, schedulerImage stri
 	}
 
 	return nil
+}
+
+// RefreshNodeConfiguration regenerates node-local kubelet and control-plane
+// configuration from the current cluster bootstrap data.
+func RefreshNodeConfiguration(ctx context.Context, client *v202611.Client, authHeader v202611.RequestEditorFn, clusterName, nodeName string, labels map[string]string) error {
+	clusterResp, err := client.GetCluster(ctx, clusterName, authHeader)
+	if err != nil {
+		return fmt.Errorf("get cluster for config refresh: %w", err)
+	}
+	if clusterResp.StatusCode != http.StatusOK {
+		errMsg := v202611.ParseErrorResponse(clusterResp)
+		clusterResp.Body.Close()
+		return fmt.Errorf("get cluster for config refresh failed: %s", errMsg)
+	}
+	var clusterInfo v202611.Cluster
+	if err := json.NewDecoder(clusterResp.Body).Decode(&clusterInfo); err != nil {
+		clusterResp.Body.Close()
+		return fmt.Errorf("decode cluster for config refresh: %w", err)
+	}
+	clusterResp.Body.Close()
+
+	bootstrapResp, err := client.BootstrapNode(ctx, clusterName, nodeName, authHeader)
+	if err != nil {
+		return fmt.Errorf("bootstrap node for config refresh: %w", err)
+	}
+	if bootstrapResp.StatusCode != http.StatusOK {
+		errMsg := v202611.ParseErrorResponse(bootstrapResp)
+		bootstrapResp.Body.Close()
+		return fmt.Errorf("bootstrap node for config refresh failed: %s", errMsg)
+	}
+	var bootstrapSecret v202611.BootstrapSecretResponse
+	if err := json.NewDecoder(bootstrapResp.Body).Decode(&bootstrapSecret); err != nil {
+		bootstrapResp.Body.Close()
+		return fmt.Errorf("decode bootstrap data for config refresh: %w", err)
+	}
+	bootstrapResp.Body.Close()
+
+	if err := storeCerts(bootstrapSecret); err != nil {
+		return fmt.Errorf("store refreshed certs: %w", err)
+	}
+
+	podCIDR, serviceCIDR, kubeDNSIP := resolveClusterCIDRs(&clusterInfo)
+	componentVersion := resolveClusterComponentVersion(&clusterInfo)
+	if componentVersion == "" {
+		return fmt.Errorf("cluster component version is unavailable")
+	}
+	controllerImage := fmt.Sprintf("registry.k8s.io/kube-controller-manager:%s", componentVersion)
+	schedulerImage := fmt.Sprintf("registry.k8s.io/kube-scheduler:%s", componentVersion)
+
+	kubeletChanged, err := generateKubeletConfig(nodeName, ptrStr(bootstrapSecret.ClusterDNS), kubeDNSIP, bootstrapSecret.ComponentConfig)
+	if err != nil {
+		return fmt.Errorf("refresh kubelet config: %w", err)
+	}
+	if err := generateSchedulerKubeconfig(ptrStr(bootstrapSecret.ClusterDNS)); err != nil {
+		return fmt.Errorf("refresh scheduler kubeconfig: %w", err)
+	}
+	if err := generateControllerManagerKubeconfig(ptrStr(bootstrapSecret.ClusterDNS)); err != nil {
+		return fmt.Errorf("refresh controller-manager kubeconfig: %w", err)
+	}
+	if err := createStaticPods(podCIDR, serviceCIDR, controllerImage, schedulerImage, bootstrapSecret.ComponentConfig); err != nil {
+		return fmt.Errorf("refresh static pods: %w", err)
+	}
+	serviceChanged, err := writeKubeletService(labels)
+	if err != nil {
+		return fmt.Errorf("refresh kubelet service: %w", err)
+	}
+	if serviceChanged {
+		if err := RunCmdCapture("systemctl", "daemon-reload"); err != nil {
+			return fmt.Errorf("reload systemd after kubelet service change: %w", err)
+		}
+	}
+	if kubeletChanged || serviceChanged {
+		slog.Info("kubelet config changed; restarting kubelet")
+		if err := RunCmdCapture("systemctl", "restart", "kubelet"); err != nil {
+			return fmt.Errorf("restart kubelet: %w", err)
+		}
+	}
+	return nil
+}
+
+func writeKubeletService(labels map[string]string) (bool, error) {
+	execStart := kubeletExecStart(labels)
+	rendered, err := renderTemplateFromEmbed(NodeConfigs, "configassets/kubelet.service", map[string]string{
+		"ExecStart": execStart,
+	})
+	if err != nil {
+		return false, err
+	}
+	serviceChanged, err := writeFileAsRootIfChangedWithBackup(KubeletServicePath, rendered, 0644, true)
+	if err != nil {
+		return false, err
+	}
+	if err := RunCmd("mkdir", "-p", filepath.Dir(KubeletServiceDropInPath)); err != nil {
+		return false, err
+	}
+	dropInChanged, err := writeFileAsRootIfChanged(KubeletServiceDropInPath, []byte(renderKubeletDropIn(execStart)), 0644)
+	if err != nil {
+		return false, err
+	}
+	return serviceChanged || dropInChanged, nil
+}
+
+func kubeletExecStart(labels map[string]string) string {
+	args := []string{
+		"/usr/local/bin/kubelet",
+		"--kubeconfig=" + KubeletKubeconfigPath,
+		"--config=" + KubeletConfigPath,
+		"--fail-swap-on=false",
+	}
+	if nodeLabels := renderNodeLabels(labels); nodeLabels != "" {
+		args = append(args, "--node-labels="+nodeLabels)
+	}
+	return strings.Join(args, " ")
+}
+
+// renderKubeletDropIn overrides package-managed kubeadm/kind drop-ins. Those
+// drop-ins replace ExecStart with /usr/bin/kubelet and pass kubeadm bootstrap
+// arguments, which fails when /etc/kubernetes/bootstrap-kubelet.conf is absent.
+func renderKubeletDropIn(execStart string) string {
+	return fmt.Sprintf(`[Service]
+# Managed by kubehubcli. Keep this drop-in after kubeadm/kind drop-ins.
+Environment=KUBELET_KUBECONFIG_ARGS=
+Environment=KUBELET_CONFIG_ARGS=
+Environment=KUBELET_KUBEADM_ARGS=
+Environment=KUBELET_EXTRA_ARGS=
+EnvironmentFile=
+ExecStart=
+ExecStart=%s
+`, execStart)
+}
+
+func componentFeatureGates(componentConfig *v202611.ComponentConfigCollection, component string) map[string]bool {
+	if componentConfig == nil {
+		return nil
+	}
+	config, ok := (*componentConfig)[component]
+	if !ok || config.FeatureGates == nil {
+		return nil
+	}
+	return *config.FeatureGates
+}
+
+func featureGateArgLine(componentConfig *v202611.ComponentConfigCollection, component string) string {
+	featureGates := componentFeatureGates(componentConfig, component)
+	names := make([]string, 0, len(featureGates))
+	for name := range featureGates {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	values := make([]string, 0, len(names))
+	for _, name := range names {
+		values = append(values, fmt.Sprintf("%s=%t", name, featureGates[name]))
+	}
+	return "--feature-gates=" + strings.Join(values, ",")
 }
 
 func installBinary(name, version string, verbose bool) error {
@@ -989,14 +1171,6 @@ func installContainerd() error {
 		slog.Warn(fmt.Sprintf("warning: remove /tmp/%s: %v", tarball, err))
 	}
 
-	if err := RunCmdCapture("mkdir", "-p", "/etc/containerd"); err != nil {
-		return fmt.Errorf("create /etc/containerd: %w", err)
-	}
-
-	if err := RunCmdCapture("sh", "-c", "/usr/local/bin/containerd config default > /etc/containerd/config.toml"); err != nil {
-		return fmt.Errorf("generate default config: %w", err)
-	}
-
 	serviceURL := fmt.Sprintf("https://raw.githubusercontent.com/containerd/containerd/v%s/containerd.service", version)
 
 	if err := RunCmdCapture("mkdir", "-p", "/usr/local/lib/systemd/system"); err != nil {
@@ -1018,6 +1192,30 @@ func installContainerd() error {
 	return nil
 }
 
+func findContainerdBinary() (string, error) {
+	if binary, err := exec.LookPath("containerd"); err == nil {
+		return binary, nil
+	}
+	for _, candidate := range []string{"/usr/local/bin/containerd", "/usr/bin/containerd"} {
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("containerd binary not found")
+}
+
+func dumpDefaultContainerdConfig(path string) error {
+	binary, err := findContainerdBinary()
+	if err != nil {
+		return err
+	}
+	out, err := exec.Command(binary, "config", "default").Output()
+	if err != nil {
+		return fmt.Errorf("%s config default: %w", binary, err)
+	}
+	return writeFileAsRoot(path, out, 0644)
+}
+
 func configureContainerd(info *HostInfo, configPaths ...string) error {
 	configPath := ContainerdConfigPath
 	if len(configPaths) > 0 && configPaths[0] != "" {
@@ -1025,6 +1223,16 @@ func configureContainerd(info *HostInfo, configPaths ...string) error {
 	}
 
 	slog.Info("--- Configuring containerd ---")
+
+	if err := RunCmd("mkdir", "-p", filepath.Dir(configPath)); err != nil {
+		return fmt.Errorf("create containerd config directory: %w", err)
+	}
+	if err := backupFileAsRoot(configPath); err != nil {
+		return err
+	}
+	if err := dumpDefaultContainerdConfig(configPath); err != nil {
+		return fmt.Errorf("dump default containerd config: %w", err)
+	}
 
 	if info != nil {
 		osConfig := DetectOSConfigurator(info.Distro)
@@ -1102,16 +1310,11 @@ func installCrictl() error {
 	return nil
 }
 
-func enableKubelet() error {
+func enableKubelet(labels map[string]string) error {
 	slog.Info("--- Enabling and starting kubelet ---")
 
-	data, err := NodeConfigs.ReadFile("configassets/kubelet.service")
-	if err != nil {
-		return fmt.Errorf("read kubelet.service: %w", err)
-	}
-
-	if err := writeFileAsRoot("/etc/systemd/system/kubelet.service", data, 0644); err != nil {
-		return err
+	if _, err := writeKubeletService(labels); err != nil {
+		return fmt.Errorf("write kubelet service: %w", err)
 	}
 
 	if err := RunCmdCapture("systemctl", "daemon-reload"); err != nil {
@@ -1129,23 +1332,96 @@ func enableKubelet() error {
 	return nil
 }
 
+func renderNodeLabels(labels map[string]string) string {
+	names := make([]string, 0, len(labels))
+	for name := range labels {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	values := make([]string, 0, len(names))
+	for _, name := range names {
+		values = append(values, name+"="+labels[name])
+	}
+	return strings.Join(values, ",")
+}
+
 func executeTemplateFromEmbed(fsys any, templatePath, outputPath string, data interface{}) error {
+	rendered, err := renderTemplateFromEmbed(fsys, templatePath, data)
+	if err != nil {
+		return err
+	}
+	return writeFileAsRoot(outputPath, rendered, 0644)
+}
+
+func renderTemplateFromEmbed(fsys any, templatePath string, data interface{}) ([]byte, error) {
 	tmplData, err := fsys.(interface{ ReadFile(string) ([]byte, error) }).ReadFile(templatePath)
 	if err != nil {
-		return fmt.Errorf("read template %s: %w", templatePath, err)
+		return nil, fmt.Errorf("read template %s: %w", templatePath, err)
 	}
 
 	tmpl, err := template.New("").Parse(string(tmplData))
 	if err != nil {
-		return fmt.Errorf("parse template: %w", err)
+		return nil, fmt.Errorf("parse template: %w", err)
 	}
 
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, data); err != nil {
-		return fmt.Errorf("execute template: %w", err)
+		return nil, fmt.Errorf("execute template: %w", err)
 	}
 
-	return writeFileAsRoot(outputPath, buf.Bytes(), 0644)
+	return buf.Bytes(), nil
+}
+
+func writeFileAsRootIfChanged(path string, data []byte, mode os.FileMode) (bool, error) {
+	return writeFileAsRootIfChangedWithBackup(path, data, mode, false)
+}
+
+func writeFileAsRootIfChangedWithBackup(path string, data []byte, mode os.FileMode, backup bool) (bool, error) {
+	if existing, err := os.ReadFile(path); err == nil && bytes.Equal(existing, data) {
+		return false, nil
+	}
+	if _, err := os.Stat(path); err == nil && backup {
+		if err := backupFileAsRoot(path); err != nil {
+			return false, err
+		}
+	}
+	if err := writeFileAsRoot(path, data, mode); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func backupFilePath(path string, now time.Time) string {
+	return fmt.Sprintf("%s.%s.bak", path, now.Format("2006-01-02"))
+}
+
+// backupFileAsRoot copies an existing file next to itself as
+// "<name>.<YYYY-MM-DD>.bak". The first backup for a given day is kept so
+// repeated reconciliation never replaces the original configuration.
+func backupFileAsRoot(path string) error {
+	return backupFileAsRootAt(path, time.Now())
+}
+
+func backupFileAsRootAt(path string, now time.Time) error {
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("stat %s: %w", path, err)
+	}
+
+	backupPath := backupFilePath(path, now)
+	if _, err := os.Stat(backupPath); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("stat backup %s: %w", backupPath, err)
+	}
+
+	if err := RunCmdCapture("cp", "-a", path, backupPath); err != nil {
+		return fmt.Errorf("backup %s: %w", path, err)
+	}
+	slog.Info(fmt.Sprintf("%s backed up to %s", path, backupPath))
+	return nil
 }
 
 func ptrStr(s *string) string {
@@ -1185,7 +1461,7 @@ func ptrMap(m map[string]string) *map[string]string {
 	return &m
 }
 
-func hostHardwareToV202607(hw *HostHardware) *v202607.HardwareInfo {
+func hostHardwareToV202607(hw *HostHardware) *v202611.HardwareInfo {
 	if hw == nil {
 		return nil
 	}
@@ -1195,12 +1471,12 @@ func hostHardwareToV202607(hw *HostHardware) *v202607.HardwareInfo {
 	memMB := int(hw.MemoryMB)
 	isVirtual := hw.IsVirtual
 
-	return &v202607.HardwareInfo{
-		Cpus: &[]v202607.CPU{{
+	return &v202611.HardwareInfo{
+		Cpus: &[]v202611.CPU{{
 			Model: &cpuModel,
 			Cores: &cores,
 		}},
-		Memory: &v202607.Memory{
+		Memory: &v202611.Memory{
 			TotalInMb: &memMB,
 		},
 		IsVirtual: &isVirtual,

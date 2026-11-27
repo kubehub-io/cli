@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"os"
 
-	v202607 "github.com/kubehub-io/kubehubcli/pkg/clientlib/v202607"
+	v202611 "github.com/kubehub-io/kubehubcli/pkg/clientlib/v202611"
 	"github.com/kubehub-io/kubehubcli/pkg/kubehubcli"
 	"github.com/spf13/cobra"
 )
@@ -55,7 +55,7 @@ func clusterInfoCmd(cfg *kubehubcli.Config) *cobra.Command {
 				errorExit("%s", string(body))
 			}
 
-			var clusterInfo v202607.Cluster
+			var clusterInfo v202611.Cluster
 			if err := json.NewDecoder(resp.Body).Decode(&clusterInfo); err != nil {
 				errorExit("decode response: %v", err)
 			}
@@ -119,12 +119,12 @@ func clusterReconcileCmd(cfg *kubehubcli.Config) *cobra.Command {
 				errorExit("%s", string(body))
 			}
 
-			var clusterInfo v202607.Cluster
+			var clusterInfo v202611.Cluster
 			if err := json.NewDecoder(resp.Body).Decode(&clusterInfo); err != nil {
 				errorExit("decode response: %v", err)
 			}
 
-			clusterRequest := v202607.ClusterRequest{
+			clusterRequest := v202611.ClusterRequest{
 				Metadata: clusterInfo.Metadata,
 				Spec:     clusterInfo.Spec,
 			}

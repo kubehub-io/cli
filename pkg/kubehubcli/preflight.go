@@ -8,7 +8,7 @@ import (
 	"net"
 	"strings"
 
-	v202607 "github.com/kubehub-io/kubehubcli/pkg/clientlib/v202607"
+	v202611 "github.com/kubehub-io/kubehubcli/pkg/clientlib/v202611"
 )
 
 type PreflightResult struct {
@@ -19,7 +19,7 @@ type PreflightResult struct {
 	applyNetwork       []func() error
 }
 
-func RunPreflightChecks(ctx context.Context, client *v202607.Client, authHeader v202607.RequestEditorFn, opts *JoinOptions, clusterInfo *v202607.Cluster, info *HostInfo) (*PreflightResult, error) {
+func RunPreflightChecks(ctx context.Context, client *v202611.Client, authHeader v202611.RequestEditorFn, opts *JoinOptions, clusterInfo *v202611.Cluster, info *HostInfo) (*PreflightResult, error) {
 	result := &PreflightResult{}
 
 	osConfig := DetectOSConfigurator(info.Distro)
@@ -184,7 +184,7 @@ func planStaticIP(iface string, info *HostInfo, osConfig OSConfigurator, result 
 	return nil
 }
 
-func checkCIDRConflict(ctx context.Context, client *v202607.Client, authHeader v202607.RequestEditorFn, opts *JoinOptions, clusterInfo *v202607.Cluster, info *HostInfo, result *PreflightResult) error {
+func checkCIDRConflict(ctx context.Context, client *v202611.Client, authHeader v202611.RequestEditorFn, opts *JoinOptions, clusterInfo *v202611.Cluster, info *HostInfo, result *PreflightResult) error {
 	podCIDR, svcCIDR, _ := resolveClusterCIDRs(clusterInfo)
 
 	hostNets := detectHostNetworks()
@@ -201,7 +201,7 @@ func checkCIDRConflict(ctx context.Context, client *v202607.Client, authHeader v
 
 	slog.Warn(fmt.Sprintf("  [!] %s", strings.Join(conflicts, "; ")))
 
-	var nodes []v202607.Node
+	var nodes []v202611.Node
 	if opts != nil {
 		listResp, listErr := client.ListNodes(ctx, opts.ClusterName, authHeader)
 		if listErr == nil {
@@ -222,9 +222,9 @@ func checkCIDRConflict(ctx context.Context, client *v202607.Client, authHeader v
 			}
 			choice := promptSelect("Choose how to resolve the conflict:", options)
 			if choice == 0 {
-				updateReq := v202607.ClusterRequest{
-					Spec: &v202607.ClusterSpec{
-						Network: &v202607.Network{
+				updateReq := v202611.ClusterRequest{
+					Spec: &v202611.ClusterSpec{
+						Network: &v202611.Network{
 							PodCIDR:          &newPodCIDR,
 							ServiceCIDR:      &newSvcCIDR,
 							KubeDNSServiceIP: &newDNSIP,
@@ -236,7 +236,7 @@ func checkCIDRConflict(ctx context.Context, client *v202607.Client, authHeader v
 					return fmt.Errorf("update cluster network: %w", updateErr)
 				}
 				if updateResp.StatusCode != 200 && updateResp.StatusCode != 204 {
-					errMsg := v202607.ParseErrorResponse(updateResp)
+					errMsg := v202611.ParseErrorResponse(updateResp)
 					updateResp.Body.Close()
 					return fmt.Errorf("update cluster network: %s", errMsg)
 				}
@@ -313,7 +313,7 @@ func findInterfaceForCIDR(target *net.IPNet) string {
 	return ""
 }
 
-func checkExistingNodesNetwork(ctx context.Context, client *v202607.Client, authHeader v202607.RequestEditorFn, opts *JoinOptions, info *HostInfo) error {
+func checkExistingNodesNetwork(ctx context.Context, client *v202611.Client, authHeader v202611.RequestEditorFn, opts *JoinOptions, info *HostInfo) error {
 	if opts == nil {
 		return nil
 	}
@@ -332,7 +332,7 @@ func checkExistingNodesNetwork(ctx context.Context, client *v202607.Client, auth
 		return nil
 	}
 
-	var nodes []v202607.Node
+	var nodes []v202611.Node
 	if decodeErr := json.NewDecoder(listResp.Body).Decode(&nodes); decodeErr != nil {
 		listResp.Body.Close()
 		return nil

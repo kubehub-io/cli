@@ -1,4 +1,16 @@
-package v202607
+package v202611
+
+import "strings"
+
+const apiServerPath = "/apis/v202611"
+
+func normalizeAPIServer(server string) string {
+	server = strings.TrimRight(server, "/")
+	if !strings.HasSuffix(server, apiServerPath) {
+		server += apiServerPath
+	}
+	return server + "/"
+}
 
 // Extra fields returned by the API beyond the swagger spec.
 
