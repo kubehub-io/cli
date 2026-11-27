@@ -298,16 +298,8 @@ func renderContainerdGvisorRuntime(plugin string) string {
 }
 
 // backupContainerdConfig keeps the pristine containerd config around. The
-// backup is only created once so repeated joins cannot overwrite the original.
+// backup is only created once per day so repeated joins cannot overwrite the
+// original.
 func backupContainerdConfig() error {
-	if _, err := os.Stat(ContainerdConfigBackupPath); err == nil {
-		return nil
-	}
-
-	if err := RunCmdCapture("cp", "-a", ContainerdConfigPath, ContainerdConfigBackupPath); err != nil {
-		return fmt.Errorf("backup %s: %w", ContainerdConfigPath, err)
-	}
-
-	slog.Info(fmt.Sprintf("containerd config backed up to %s", ContainerdConfigBackupPath))
-	return nil
+	return backupFileAsRoot(ContainerdConfigPath)
 }

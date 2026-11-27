@@ -5,7 +5,7 @@ Wants=network-online.target
 After=network-online.target
 
 [Service]
-ExecStart=/usr/local/bin/kubelet --kubeconfig=/var/lib/kubelet/kubeconfig --config=/var/lib/kubelet/config.yaml --fail-swap-on=false{{if .NodeLabels}} --node-labels={{.NodeLabels}}{{end}}
+ExecStart={{.ExecStart}}
 Restart=always
 StartLimitInterval=0
 RestartSec=10

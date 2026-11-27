@@ -639,7 +639,7 @@ func generateKubeletConfig(hostname, clusterFQDN, kubeDNSIP string, componentCon
 	if err != nil {
 		return false, fmt.Errorf("render kubelet.conf: %w", err)
 	}
-	changed, err := writeFileAsRootIfChanged(KubeletConfigPath, rendered, 0644)
+	changed, err := writeFileAsRootIfChangedWithBackup(KubeletConfigPath, rendered, 0644, true)
 	if err != nil {
 		return false, fmt.Errorf("write kubelet.conf: %w", err)
 	}
@@ -822,13 +822,54 @@ func RefreshNodeConfiguration(ctx context.Context, client *v202611.Client, authH
 }
 
 func writeKubeletService(labels map[string]string) (bool, error) {
+	execStart := kubeletExecStart(labels)
 	rendered, err := renderTemplateFromEmbed(NodeConfigs, "configassets/kubelet.service", map[string]string{
-		"NodeLabels": renderNodeLabels(labels),
+		"ExecStart": execStart,
 	})
 	if err != nil {
 		return false, err
 	}
-	return writeFileAsRootIfChanged("/etc/systemd/system/kubelet.service", rendered, 0644)
+	serviceChanged, err := writeFileAsRootIfChangedWithBackup(KubeletServicePath, rendered, 0644, true)
+	if err != nil {
+		return false, err
+	}
+	if err := RunCmd("mkdir", "-p", filepath.Dir(KubeletServiceDropInPath)); err != nil {
+		return false, err
+	}
+	dropInChanged, err := writeFileAsRootIfChanged(KubeletServiceDropInPath, []byte(renderKubeletDropIn(execStart)), 0644)
+	if err != nil {
+		return false, err
+	}
+	return serviceChanged || dropInChanged, nil
+}
+
+func kubeletExecStart(labels map[string]string) string {
+	args := []string{
+		"/usr/local/bin/kubelet",
+		"--kubeconfig=" + KubeletKubeconfigPath,
+		"--config=" + KubeletConfigPath,
+		"--fail-swap-on=false",
+	}
+	if nodeLabels := renderNodeLabels(labels); nodeLabels != "" {
+		args = append(args, "--node-labels="+nodeLabels)
+	}
+	return strings.Join(args, " ")
+}
+
+// renderKubeletDropIn overrides package-managed kubeadm/kind drop-ins. Those
+// drop-ins replace ExecStart with /usr/bin/kubelet and pass kubeadm bootstrap
+// arguments, which fails when /etc/kubernetes/bootstrap-kubelet.conf is absent.
+func renderKubeletDropIn(execStart string) string {
+	return fmt.Sprintf(`[Service]
+# Managed by kubehubcli. Keep this drop-in after kubeadm/kind drop-ins.
+Environment=KUBELET_KUBECONFIG_ARGS=
+Environment=KUBELET_CONFIG_ARGS=
+Environment=KUBELET_KUBEADM_ARGS=
+Environment=KUBELET_EXTRA_ARGS=
+EnvironmentFile=
+ExecStart=
+ExecStart=%s
+`, execStart)
 }
 
 func componentFeatureGates(componentConfig *v202611.ComponentConfigCollection, component string) map[string]bool {
@@ -1130,14 +1171,6 @@ func installContainerd() error {
 		slog.Warn(fmt.Sprintf("warning: remove /tmp/%s: %v", tarball, err))
 	}
 
-	if err := RunCmdCapture("mkdir", "-p", "/etc/containerd"); err != nil {
-		return fmt.Errorf("create /etc/containerd: %w", err)
-	}
-
-	if err := RunCmdCapture("sh", "-c", "/usr/local/bin/containerd config default > /etc/containerd/config.toml"); err != nil {
-		return fmt.Errorf("generate default config: %w", err)
-	}
-
 	serviceURL := fmt.Sprintf("https://raw.githubusercontent.com/containerd/containerd/v%s/containerd.service", version)
 
 	if err := RunCmdCapture("mkdir", "-p", "/usr/local/lib/systemd/system"); err != nil {
@@ -1159,6 +1192,30 @@ func installContainerd() error {
 	return nil
 }
 
+func findContainerdBinary() (string, error) {
+	if binary, err := exec.LookPath("containerd"); err == nil {
+		return binary, nil
+	}
+	for _, candidate := range []string{"/usr/local/bin/containerd", "/usr/bin/containerd"} {
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("containerd binary not found")
+}
+
+func dumpDefaultContainerdConfig(path string) error {
+	binary, err := findContainerdBinary()
+	if err != nil {
+		return err
+	}
+	out, err := exec.Command(binary, "config", "default").Output()
+	if err != nil {
+		return fmt.Errorf("%s config default: %w", binary, err)
+	}
+	return writeFileAsRoot(path, out, 0644)
+}
+
 func configureContainerd(info *HostInfo, configPaths ...string) error {
 	configPath := ContainerdConfigPath
 	if len(configPaths) > 0 && configPaths[0] != "" {
@@ -1166,6 +1223,16 @@ func configureContainerd(info *HostInfo, configPaths ...string) error {
 	}
 
 	slog.Info("--- Configuring containerd ---")
+
+	if err := RunCmd("mkdir", "-p", filepath.Dir(configPath)); err != nil {
+		return fmt.Errorf("create containerd config directory: %w", err)
+	}
+	if err := backupFileAsRoot(configPath); err != nil {
+		return err
+	}
+	if err := dumpDefaultContainerdConfig(configPath); err != nil {
+		return fmt.Errorf("dump default containerd config: %w", err)
+	}
 
 	if info != nil {
 		osConfig := DetectOSConfigurator(info.Distro)
@@ -1246,15 +1313,8 @@ func installCrictl() error {
 func enableKubelet(labels map[string]string) error {
 	slog.Info("--- Enabling and starting kubelet ---")
 
-	data, err := renderTemplateFromEmbed(NodeConfigs, "configassets/kubelet.service", map[string]string{
-		"NodeLabels": renderNodeLabels(labels),
-	})
-	if err != nil {
-		return fmt.Errorf("render kubelet.service: %w", err)
-	}
-
-	if err := writeFileAsRoot("/etc/systemd/system/kubelet.service", data, 0644); err != nil {
-		return err
+	if _, err := writeKubeletService(labels); err != nil {
+		return fmt.Errorf("write kubelet service: %w", err)
 	}
 
 	if err := RunCmdCapture("systemctl", "daemon-reload"); err != nil {
@@ -1313,13 +1373,55 @@ func renderTemplateFromEmbed(fsys any, templatePath string, data interface{}) ([
 }
 
 func writeFileAsRootIfChanged(path string, data []byte, mode os.FileMode) (bool, error) {
+	return writeFileAsRootIfChangedWithBackup(path, data, mode, false)
+}
+
+func writeFileAsRootIfChangedWithBackup(path string, data []byte, mode os.FileMode, backup bool) (bool, error) {
 	if existing, err := os.ReadFile(path); err == nil && bytes.Equal(existing, data) {
 		return false, nil
+	}
+	if _, err := os.Stat(path); err == nil && backup {
+		if err := backupFileAsRoot(path); err != nil {
+			return false, err
+		}
 	}
 	if err := writeFileAsRoot(path, data, mode); err != nil {
 		return false, err
 	}
 	return true, nil
+}
+
+func backupFilePath(path string, now time.Time) string {
+	return fmt.Sprintf("%s.%s.bak", path, now.Format("2006-01-02"))
+}
+
+// backupFileAsRoot copies an existing file next to itself as
+// "<name>.<YYYY-MM-DD>.bak". The first backup for a given day is kept so
+// repeated reconciliation never replaces the original configuration.
+func backupFileAsRoot(path string) error {
+	return backupFileAsRootAt(path, time.Now())
+}
+
+func backupFileAsRootAt(path string, now time.Time) error {
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("stat %s: %w", path, err)
+	}
+
+	backupPath := backupFilePath(path, now)
+	if _, err := os.Stat(backupPath); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("stat backup %s: %w", backupPath, err)
+	}
+
+	if err := RunCmdCapture("cp", "-a", path, backupPath); err != nil {
+		return fmt.Errorf("backup %s: %w", path, err)
+	}
+	slog.Info(fmt.Sprintf("%s backed up to %s", path, backupPath))
+	return nil
 }
 
 func ptrStr(s *string) string {
