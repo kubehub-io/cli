@@ -269,7 +269,7 @@ func joinNodeToCluster(client *v202611.Client, authHeader v202611.RequestEditorF
 	}
 
 	laptop := isLaptop()
-	componentVersion := resolveClusterComponentVersion(clusterInfo)
+	componentVersion := ResolveClusterComponentVersion(clusterInfo)
 	plan := newJoinPlan(info, opts, preflight, laptop, clusterInfo, componentVersion)
 	if err := confirmJoinPlan(plan); err != nil {
 		return err
@@ -388,7 +388,7 @@ func joinNodeToCluster(client *v202611.Client, authHeader v202611.RequestEditorF
 
 	podCIDR, serviceCIDR, kubeDNSDefaultIP := resolveClusterCIDRs(clusterInfo)
 
-	componentVersion = resolveClusterComponentVersion(clusterInfo)
+	componentVersion = ResolveClusterComponentVersion(clusterInfo)
 	controllerImage := fmt.Sprintf("registry.k8s.io/kube-controller-manager:%s", componentVersion)
 	schedulerImage := fmt.Sprintf("registry.k8s.io/kube-scheduler:%s", componentVersion)
 
@@ -484,7 +484,9 @@ func joinNodeToCluster(client *v202611.Client, authHeader v202611.RequestEditorF
 	return nil
 }
 
-func resolveClusterComponentVersion(clusterInfo *v202611.Cluster) string {
+// ResolveClusterComponentVersion returns the Kubernetes version advertised by
+// the cluster API server.
+func ResolveClusterComponentVersion(clusterInfo *v202611.Cluster) string {
 	if clusterInfo.Status != nil && clusterInfo.Status.ControlPlaneComponents != nil {
 		for _, name := range []string{"kubeApiserver", "kube-apiserver", "kube_apiserver"} {
 			apiSrv, ok := (*clusterInfo.Status.ControlPlaneComponents)[name]
@@ -783,9 +785,13 @@ func RefreshNodeConfiguration(ctx context.Context, client *v202611.Client, authH
 	}
 
 	podCIDR, serviceCIDR, kubeDNSIP := resolveClusterCIDRs(&clusterInfo)
-	componentVersion := resolveClusterComponentVersion(&clusterInfo)
+	componentVersion := ResolveClusterComponentVersion(&clusterInfo)
 	if componentVersion == "" {
 		return fmt.Errorf("cluster component version is unavailable")
+	}
+	kubeletBinaryChanged, err := ensureKubeletVersion(componentVersion)
+	if err != nil {
+		return fmt.Errorf("refresh kubelet version: %w", err)
 	}
 	controllerImage := fmt.Sprintf("registry.k8s.io/kube-controller-manager:%s", componentVersion)
 	schedulerImage := fmt.Sprintf("registry.k8s.io/kube-scheduler:%s", componentVersion)
@@ -812,13 +818,31 @@ func RefreshNodeConfiguration(ctx context.Context, client *v202611.Client, authH
 			return fmt.Errorf("reload systemd after kubelet service change: %w", err)
 		}
 	}
-	if kubeletChanged || serviceChanged {
-		slog.Info("kubelet config changed; restarting kubelet")
+	if kubeletBinaryChanged || kubeletChanged || serviceChanged {
+		slog.Info("kubelet binary or config changed; restarting kubelet")
 		if err := RunCmdCapture("systemctl", "restart", "kubelet"); err != nil {
 			return fmt.Errorf("restart kubelet: %w", err)
 		}
 	}
 	return nil
+}
+
+func ensureKubeletVersion(targetVersion string) (bool, error) {
+	target := kubernetesVersionNumber(targetVersion)
+	if target == "" {
+		return false, fmt.Errorf("invalid target version %q", targetVersion)
+	}
+
+	output, err := exec.Command("/usr/local/bin/kubelet", "--version").Output()
+	if err == nil && kubernetesVersionNumber(string(output)) == target {
+		return false, nil
+	}
+
+	slog.Info(fmt.Sprintf("Installing kubelet %s", target))
+	if err := installKubelet(target, false); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func writeKubeletService(labels map[string]string) (bool, error) {

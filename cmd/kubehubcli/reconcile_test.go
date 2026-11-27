@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -95,6 +96,10 @@ func TestNodeReconcileSendsETagHeader(t *testing.T) {
 		switch r.Method {
 		case http.MethodGet:
 			w.Header().Set("Content-Type", "application/json")
+			if strings.HasSuffix(r.URL.Path, "/clusters/pp2") {
+				json.NewEncoder(w).Encode(testClusterWithKubeletVersion("v1.37.3"))
+				return
+			}
 			json.NewEncoder(w).Encode(map[string]any{
 				"metadata": map[string]any{"name": "node1", "etag": etag},
 				"spec":     map[string]any{"os": "ubuntu", "arch": "amd64"},
@@ -169,6 +174,10 @@ func nodeReconcileServer(t *testing.T, putCalls *int) *httptest.Server {
 		switch r.Method {
 		case http.MethodGet:
 			w.Header().Set("Content-Type", "application/json")
+			if strings.HasSuffix(r.URL.Path, "/clusters/pp2") {
+				json.NewEncoder(w).Encode(testClusterWithKubeletVersion("v1.37.3"))
+				return
+			}
 			json.NewEncoder(w).Encode(map[string]any{
 				"metadata": map[string]any{"name": "node1", "etag": `"node-etag-456"`},
 				"spec":     map[string]any{"os": "ubuntu", "arch": "amd64"},
@@ -182,6 +191,16 @@ func nodeReconcileServer(t *testing.T, putCalls *int) *httptest.Server {
 	}))
 	t.Cleanup(srv.Close)
 	return srv
+}
+
+func testClusterWithKubeletVersion(version string) map[string]any {
+	return map[string]any{
+		"status": map[string]any{
+			"controlPlaneComponents": map[string]any{
+				"kubeApiserver": map[string]any{"version": version},
+			},
+		},
+	}
 }
 
 func TestNodeReconcileInstallsSoftwareByDefault(t *testing.T) {

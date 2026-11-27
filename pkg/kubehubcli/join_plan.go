@@ -139,7 +139,7 @@ func newJoinPlan(info *HostInfo, opts *JoinOptions, preflight *PreflightResult, 
 		case *v202611.Cluster:
 			clusterInfo = v
 			if componentVersion == "" {
-				componentVersion = resolveClusterComponentVersion(v)
+				componentVersion = ResolveClusterComponentVersion(v)
 			}
 		case string:
 			if componentVersion == "" {
@@ -148,7 +148,7 @@ func newJoinPlan(info *HostInfo, opts *JoinOptions, preflight *PreflightResult, 
 		}
 	}
 	if clusterInfo != nil && componentVersion == "" {
-		componentVersion = resolveClusterComponentVersion(clusterInfo)
+		componentVersion = ResolveClusterComponentVersion(clusterInfo)
 	}
 
 	plan := JoinPlan{}
@@ -211,12 +211,31 @@ func newJoinPlan(info *HostInfo, opts *JoinOptions, preflight *PreflightResult, 
 // NewReconcilePlan describes the host-side changes that `node reconcile`
 // applies. A node that has already joined only needs its software refreshed, so
 // the plan mirrors the software section of the join plan instead of repeating
-// the one-time network and kubelet setup.
-func NewReconcilePlan(info *HostInfo, installGvisor bool) JoinPlan {
+// the one-time network and kubelet configuration.
+func NewReconcilePlan(info *HostInfo, installGvisor bool, targetKubeletVersion string) JoinPlan {
 	plan := JoinPlan{Title: "NODE RECONCILE PLAN"}
 	runc := runcPlanItem(info)
 	if runc.Description != "No update needed" {
 		plan.Software = append(plan.Software, runc)
+	}
+	if targetKubeletVersion != "" {
+		target := kubernetesVersionNumber(targetKubeletVersion)
+		current := ""
+		if info != nil && info.Kubelet != nil {
+			current = kubernetesVersionNumber(info.Kubelet.Version)
+		}
+		switch {
+		case current == "":
+			plan.Software = append(plan.Software, JoinPlanItem{
+				Summary:     "Install kubelet " + target,
+				Description: "Kubernetes version selected by the cluster API server",
+			})
+		case current != target:
+			plan.Software = append(plan.Software, JoinPlanItem{
+				Summary:     fmt.Sprintf("Update kubelet from %s to %s", current, target),
+				Description: "Kubernetes version selected by the cluster API server",
+			})
+		}
 	}
 	if installGvisor && !gvisorInstalled() {
 		plan.Software = append(plan.Software, JoinPlanItem{
@@ -230,6 +249,15 @@ func NewReconcilePlan(info *HostInfo, installGvisor bool) JoinPlan {
 	})
 
 	return plan
+}
+
+func kubernetesVersionNumber(version string) string {
+	re := regexp.MustCompile(`v?\d+\.\d+\.\d+`)
+	match := re.FindString(version)
+	if match == "" {
+		return ""
+	}
+	return "v" + strings.TrimPrefix(match, "v")
 }
 
 // runcPlanItem describes what has to happen for runc on this host.
