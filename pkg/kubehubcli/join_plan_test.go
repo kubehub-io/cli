@@ -39,7 +39,7 @@ func TestJoinPlanWriteToFormatsSectionsAndWrapsText(t *testing.T) {
 
 func TestNewReconcilePlanIncludesNeededSoftware(t *testing.T) {
 	info := &HostInfo{Runc: &BinaryInfo{Version: "runc version 1.1.0"}}
-	plan := NewReconcilePlan(info, false)
+	plan := NewReconcilePlan(info, false, "v1.37.3")
 
 	var output strings.Builder
 	require.NoError(t, plan.writeTo(&output))
@@ -51,8 +51,13 @@ func TestNewReconcilePlanIncludesNeededSoftware(t *testing.T) {
 }
 
 func TestNewReconcilePlanOmitsSatisfiedSoftware(t *testing.T) {
-	info := &HostInfo{Runc: &BinaryInfo{Version: "runc version " + RuncVersion}}
-	plan := NewReconcilePlan(info, false)
+	info := &HostInfo{
+		Runc:       &BinaryInfo{Version: "runc version " + RuncVersion},
+		Kubelet:    &KubeletInfo{Version: "Kubernetes v1.37.3"},
+		Containerd: &ContainerdInfo{Version: "containerd v" + ContainerdVersion},
+		Crictl:     &BinaryInfo{Version: "crictl version " + CrictlVersion},
+	}
+	plan := NewReconcilePlan(info, false, "v1.37.3")
 
 	var output strings.Builder
 	require.NoError(t, plan.writeTo(&output))
@@ -62,4 +67,46 @@ func TestNewReconcilePlanOmitsSatisfiedSoftware(t *testing.T) {
 	require.NotContains(t, text, "runc")
 	require.NotContains(t, text, "gVisor")
 	require.NotContains(t, text, "NETWORK SETUP")
+}
+
+func TestNewReconcilePlanShowsContainerdUpgrade(t *testing.T) {
+	info := &HostInfo{Containerd: &ContainerdInfo{Version: "containerd v2.2.0"}}
+	plan := NewReconcilePlan(info, false, "v1.37.3")
+
+	var output strings.Builder
+	require.NoError(t, plan.writeTo(&output))
+	require.Contains(t, output.String(), "Update containerd from 2.2.0 to "+ContainerdVersion)
+}
+
+func TestNewReconcilePlanShowsCrictlUpgrade(t *testing.T) {
+	info := &HostInfo{Crictl: &BinaryInfo{Version: "crictl version v1.33.0"}}
+	plan := NewReconcilePlan(info, false, "v1.37.3")
+
+	var output strings.Builder
+	require.NoError(t, plan.writeTo(&output))
+	require.Contains(t, output.String(), "Update crictl from v1.33.0 to "+CrictlVersion)
+}
+
+func TestNewReconcilePlanShowsKubeletUpgrade(t *testing.T) {
+	info := &HostInfo{
+		Runc:    &BinaryInfo{Version: "runc version " + RuncVersion},
+		Kubelet: &KubeletInfo{Version: "Kubernetes v1.35.4"},
+	}
+	plan := NewReconcilePlan(info, false, "v1.37.3")
+
+	var output strings.Builder
+	require.NoError(t, plan.writeTo(&output))
+	require.Contains(t, output.String(), "Update kubelet from v1.35.4 to v1.37.3")
+}
+
+func TestNewReconcilePlanOmitsCurrentKubelet(t *testing.T) {
+	info := &HostInfo{
+		Runc:    &BinaryInfo{Version: "runc version " + RuncVersion},
+		Kubelet: &KubeletInfo{Version: "Kubernetes v1.37.3"},
+	}
+	plan := NewReconcilePlan(info, false, "v1.37.3")
+
+	var output strings.Builder
+	require.NoError(t, plan.writeTo(&output))
+	require.NotContains(t, output.String(), "kubelet")
 }

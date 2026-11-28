@@ -269,7 +269,7 @@ func joinNodeToCluster(client *v202611.Client, authHeader v202611.RequestEditorF
 	}
 
 	laptop := isLaptop()
-	componentVersion := resolveClusterComponentVersion(clusterInfo)
+	componentVersion := ResolveClusterComponentVersion(clusterInfo)
 	plan := newJoinPlan(info, opts, preflight, laptop, clusterInfo, componentVersion)
 	if err := confirmJoinPlan(plan); err != nil {
 		return err
@@ -388,7 +388,7 @@ func joinNodeToCluster(client *v202611.Client, authHeader v202611.RequestEditorF
 
 	podCIDR, serviceCIDR, kubeDNSDefaultIP := resolveClusterCIDRs(clusterInfo)
 
-	componentVersion = resolveClusterComponentVersion(clusterInfo)
+	componentVersion = ResolveClusterComponentVersion(clusterInfo)
 	controllerImage := fmt.Sprintf("registry.k8s.io/kube-controller-manager:%s", componentVersion)
 	schedulerImage := fmt.Sprintf("registry.k8s.io/kube-scheduler:%s", componentVersion)
 
@@ -484,7 +484,9 @@ func joinNodeToCluster(client *v202611.Client, authHeader v202611.RequestEditorF
 	return nil
 }
 
-func resolveClusterComponentVersion(clusterInfo *v202611.Cluster) string {
+// ResolveClusterComponentVersion returns the Kubernetes version advertised by
+// the cluster API server.
+func ResolveClusterComponentVersion(clusterInfo *v202611.Cluster) string {
 	if clusterInfo.Status != nil && clusterInfo.Status.ControlPlaneComponents != nil {
 		for _, name := range []string{"kubeApiserver", "kube-apiserver", "kube_apiserver"} {
 			apiSrv, ok := (*clusterInfo.Status.ControlPlaneComponents)[name]
@@ -783,9 +785,13 @@ func RefreshNodeConfiguration(ctx context.Context, client *v202611.Client, authH
 	}
 
 	podCIDR, serviceCIDR, kubeDNSIP := resolveClusterCIDRs(&clusterInfo)
-	componentVersion := resolveClusterComponentVersion(&clusterInfo)
+	componentVersion := ResolveClusterComponentVersion(&clusterInfo)
 	if componentVersion == "" {
 		return fmt.Errorf("cluster component version is unavailable")
+	}
+	kubeletBinaryChanged, err := ensureKubeletVersion(componentVersion)
+	if err != nil {
+		return fmt.Errorf("refresh kubelet version: %w", err)
 	}
 	controllerImage := fmt.Sprintf("registry.k8s.io/kube-controller-manager:%s", componentVersion)
 	schedulerImage := fmt.Sprintf("registry.k8s.io/kube-scheduler:%s", componentVersion)
@@ -812,13 +818,89 @@ func RefreshNodeConfiguration(ctx context.Context, client *v202611.Client, authH
 			return fmt.Errorf("reload systemd after kubelet service change: %w", err)
 		}
 	}
-	if kubeletChanged || serviceChanged {
-		slog.Info("kubelet config changed; restarting kubelet")
+	if kubeletBinaryChanged || kubeletChanged || serviceChanged {
+		slog.Info("kubelet binary or config changed; restarting kubelet")
 		if err := RunCmdCapture("systemctl", "restart", "kubelet"); err != nil {
 			return fmt.Errorf("restart kubelet: %w", err)
 		}
 	}
 	return nil
+}
+
+// RefreshContainerd upgrades containerd when the installed version is older
+// than the version managed by kubehubcli.
+func RefreshContainerd(info *HostInfo) error {
+	currentVersion := ""
+	if info != nil && info.Containerd != nil {
+		currentVersion = info.Containerd.Version
+	}
+	if !containerdVersionNeedsUpdate(currentVersion) {
+		return nil
+	}
+
+	if err := installContainerd(); err != nil {
+		return fmt.Errorf("install containerd %s: %w", ContainerdVersion, err)
+	}
+	if err := ensureContainerd(); err != nil {
+		return fmt.Errorf("restart containerd after upgrade: %w", err)
+	}
+	return nil
+}
+
+// RefreshCrictl upgrades crictl when the installed version is older than the
+// version managed by kubehubcli.
+func RefreshCrictl(info *HostInfo) error {
+	currentVersion := ""
+	if info != nil && info.Crictl != nil {
+		currentVersion = info.Crictl.Version
+	}
+	if !crictlVersionNeedsUpdate(currentVersion) {
+		return nil
+	}
+
+	slog.Info(fmt.Sprintf("Refreshing crictl to %s", CrictlVersion))
+	if err := installCrictl(); err != nil {
+		return fmt.Errorf("install crictl %s: %w", CrictlVersion, err)
+	}
+	return nil
+}
+
+func containerdVersionNeedsUpdate(currentVersion string) bool {
+	current := containerdVersionNumber(currentVersion)
+	if current == "" {
+		return true
+	}
+	return semver.Compare("v"+current, "v"+ContainerdVersion) < 0
+}
+
+func crictlVersionNeedsUpdate(currentVersion string) bool {
+	current, ok := normalizeSemver(kubernetesVersionNumber(currentVersion))
+	if !ok {
+		return true
+	}
+	required, ok := normalizeSemver(CrictlVersion)
+	if !ok {
+		return true
+	}
+	return semver.Compare(current, required) < 0
+}
+
+func ensureKubeletVersion(targetVersion string) (bool, error) {
+	target := kubernetesVersionNumber(targetVersion)
+	if target == "" {
+		return false, fmt.Errorf("invalid target version %q", targetVersion)
+	}
+
+	output, err := exec.Command("/usr/local/bin/kubelet", "--version").Output()
+	if err == nil && kubernetesVersionNumber(string(output)) == target {
+		return false, nil
+	}
+
+	slog.Info(fmt.Sprintf("Installing kubelet %s", target))
+	if err := installKubelet(target, false); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func writeKubeletService(labels map[string]string) (bool, error) {
@@ -912,19 +994,38 @@ func installBinary(name, version string, verbose bool) error {
 		return fmt.Errorf("no %s version for %s", name, key)
 	}
 
-	url := fmt.Sprintf("https://dl.k8s.io/release/%s/bin/linux/%s/%s", v, runtime.GOARCH, name)
+	url := fmt.Sprintf("https://dl.k8s.io/%s/bin/linux/%s/%s", v, runtime.GOARCH, name)
 	dest := fmt.Sprintf("/usr/local/bin/%s", name)
 
 	if verbose {
 		slog.Info(fmt.Sprintf("Downloading %s from: %s", name, url))
 	}
 
-	if err := RunCmdCapture("curl", "-fsSL", url, "-o", dest); err != nil {
+	download, err := os.CreateTemp("", "kubehubcli-"+name+"-")
+	if err != nil {
+		return fmt.Errorf("create temporary download for %s: %w", name, err)
+	}
+	tempPath := download.Name()
+	if err := download.Close(); err != nil {
+		os.Remove(tempPath)
+		return fmt.Errorf("close temporary download for %s: %w", name, err)
+	}
+	defer os.Remove(tempPath)
+
+	if err := RunCmdCapture("curl", "-fsSL", url, "-o", tempPath); err != nil {
 		return fmt.Errorf("downloading %s from %s: %w", name, url, err)
 	}
 
-	if err := RunCmdCapture("chmod", "755", dest); err != nil {
-		return fmt.Errorf("chmod %s: %w", name, err)
+	// Stage beside the destination, then rename atomically. In particular,
+	// kubelet may still be running from the old binary, which cannot safely be
+	// truncated in place.
+	stagedDest := dest + "." + filepath.Base(tempPath)
+	if err := RunCmdCapture("install", "-m", "0755", tempPath, stagedDest); err != nil {
+		return fmt.Errorf("stage %s: %w", name, err)
+	}
+	defer RunCmdCapture("rm", "-f", stagedDest)
+	if err := RunCmdCapture("mv", "-f", stagedDest, dest); err != nil {
+		return fmt.Errorf("replace %s: %w", name, err)
 	}
 
 	return nil
@@ -1159,16 +1260,63 @@ func installContainerd() error {
 
 	slog.Info(fmt.Sprintf("Downloading containerd %s", version))
 
-	if err := RunCmdCapture("curl", "-fsSL", url, "-o", "/tmp/"+tarball); err != nil {
+	archive, err := os.CreateTemp("", "kubehubcli-containerd-")
+	if err != nil {
+		return fmt.Errorf("create temporary containerd archive: %w", err)
+	}
+	archivePath := archive.Name()
+	if err := archive.Close(); err != nil {
+		os.Remove(archivePath)
+		return fmt.Errorf("close temporary containerd archive: %w", err)
+	}
+	defer os.Remove(archivePath)
+
+	if err := RunCmdCapture("curl", "-fsSL", url, "-o", archivePath); err != nil {
 		return fmt.Errorf("download containerd: %w", err)
 	}
 
-	if err := RunCmdCapture("tar", "-C", "/usr/local", "-xzf", "/tmp/"+tarball); err != nil {
+	stageMarker, err := os.CreateTemp("", "kubehubcli-containerd-stage-")
+	if err != nil {
+		return fmt.Errorf("create temporary containerd staging name: %w", err)
+	}
+	stageName := filepath.Base(stageMarker.Name())
+	if err := stageMarker.Close(); err != nil {
+		os.Remove(stageMarker.Name())
+		return fmt.Errorf("close temporary containerd staging name: %w", err)
+	}
+	if err := os.Remove(stageMarker.Name()); err != nil {
+		return fmt.Errorf("remove temporary containerd staging name: %w", err)
+	}
+	containerdBinDir := "/usr/local/bin"
+	if err := RunCmdCapture("mkdir", "-p", containerdBinDir); err != nil {
+		return fmt.Errorf("create containerd binary directory: %w", err)
+	}
+	stageDir := filepath.Join(containerdBinDir, "."+stageName)
+	if err := RunCmdCapture("mkdir", "-p", stageDir); err != nil {
+		return fmt.Errorf("create containerd staging directory: %w", err)
+	}
+	defer RunCmdCapture("rm", "-rf", stageDir)
+
+	if err := RunCmdCapture("tar", "-C", stageDir, "-xzf", archivePath); err != nil {
 		return fmt.Errorf("extract containerd: %w", err)
 	}
 
-	if err := os.Remove("/tmp/" + tarball); err != nil {
-		slog.Warn(fmt.Sprintf("warning: remove /tmp/%s: %v", tarball, err))
+	binDir := filepath.Join(stageDir, "bin")
+	binaries, err := os.ReadDir(binDir)
+	if err != nil {
+		return fmt.Errorf("read extracted containerd binaries: %w", err)
+	}
+	for _, binary := range binaries {
+		if binary.IsDir() {
+			continue
+		}
+		src := filepath.Join(binDir, binary.Name())
+		dest := filepath.Join(containerdBinDir, binary.Name())
+		// Rename on the same filesystem to replace binaries atomically. This
+		// avoids truncating containerd while its running process uses the file.
+		if err := RunCmdCapture("mv", "-f", src, dest); err != nil {
+			return fmt.Errorf("install containerd binary %s: %w", binary.Name(), err)
+		}
 	}
 
 	serviceURL := fmt.Sprintf("https://raw.githubusercontent.com/containerd/containerd/v%s/containerd.service", version)
@@ -1286,16 +1434,48 @@ func installCrictl() error {
 	url := fmt.Sprintf("https://github.com/kubernetes-sigs/cri-tools/releases/download/%s/crictl-%s-%s-%s.tar.gz",
 		version, version, runtime.GOOS, runtime.GOARCH)
 
-	if err := RunCmdCapture("curl", "-fsSL", url, "-o", "/tmp/crictl.tar.gz"); err != nil {
-		return err
+	archive, err := os.CreateTemp("", "kubehubcli-crictl-")
+	if err != nil {
+		return fmt.Errorf("create temporary crictl archive: %w", err)
+	}
+	archivePath := archive.Name()
+	if err := archive.Close(); err != nil {
+		os.Remove(archivePath)
+		return fmt.Errorf("close temporary crictl archive: %w", err)
+	}
+	defer os.Remove(archivePath)
+
+	if err := RunCmdCapture("curl", "-fsSL", url, "-o", archivePath); err != nil {
+		return fmt.Errorf("download crictl: %w", err)
 	}
 
-	if err := RunCmdCapture("tar", "-xzf", "/tmp/crictl.tar.gz", "-C", "/usr/local/bin"); err != nil {
-		return err
+	stageMarker, err := os.CreateTemp("", "kubehubcli-crictl-stage-")
+	if err != nil {
+		return fmt.Errorf("create temporary crictl staging name: %w", err)
 	}
+	stageName := filepath.Base(stageMarker.Name())
+	if err := stageMarker.Close(); err != nil {
+		os.Remove(stageMarker.Name())
+		return fmt.Errorf("close temporary crictl staging name: %w", err)
+	}
+	if err := os.Remove(stageMarker.Name()); err != nil {
+		return fmt.Errorf("remove temporary crictl staging name: %w", err)
+	}
+	binDir := "/usr/local/bin"
+	if err := RunCmdCapture("mkdir", "-p", binDir); err != nil {
+		return fmt.Errorf("create crictl binary directory: %w", err)
+	}
+	stageDir := filepath.Join(binDir, "."+stageName)
+	if err := RunCmdCapture("mkdir", "-p", stageDir); err != nil {
+		return fmt.Errorf("create crictl staging directory: %w", err)
+	}
+	defer RunCmdCapture("rm", "-rf", stageDir)
 
-	if err := os.Remove("/tmp/crictl.tar.gz"); err != nil {
-		slog.Warn(fmt.Sprintf("warning: remove /tmp/crictl.tar.gz: %v", err))
+	if err := RunCmdCapture("tar", "-xzf", archivePath, "-C", stageDir); err != nil {
+		return fmt.Errorf("extract crictl: %w", err)
+	}
+	if err := RunCmdCapture("mv", "-f", filepath.Join(stageDir, "crictl"), filepath.Join(binDir, "crictl")); err != nil {
+		return fmt.Errorf("install crictl binary: %w", err)
 	}
 
 	data, err := NodeConfigs.ReadFile("configassets/crictl.yaml")

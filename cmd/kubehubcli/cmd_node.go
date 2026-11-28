@@ -205,10 +205,12 @@ func nodeDeleteCmd(cfg *kubehubcli.Config) *cobra.Command {
 
 // Host-side seams so tests can exercise reconcile without touching the host.
 var (
-	installGvisorOnHost = kubehubcli.InstallGvisor
-	detectHostOnNode    = kubehubcli.DetectHost
-	ensureRuncOnNode    = kubehubcli.EnsureRunc
-	refreshConfigOnNode = kubehubcli.RefreshNodeConfiguration
+	installGvisorOnHost     = kubehubcli.InstallGvisor
+	detectHostOnNode        = kubehubcli.DetectHost
+	ensureRuncOnNode        = kubehubcli.EnsureRunc
+	refreshContainerdOnNode = kubehubcli.RefreshContainerd
+	refreshCrictlOnNode     = kubehubcli.RefreshCrictl
+	refreshConfigOnNode     = kubehubcli.RefreshNodeConfiguration
 )
 
 func nodeReconcileCmd(cfg *kubehubcli.Config) *cobra.Command {
@@ -251,17 +253,41 @@ func nodeReconcileCmd(cfg *kubehubcli.Config) *cobra.Command {
 				errorExit("decode response: %v", err)
 			}
 
+			clusterResp, err := client.GetCluster(ctx, cluster, authHeader)
+			if err != nil {
+				errorExit("get cluster: %v", err)
+			}
+			defer clusterResp.Body.Close()
+			if clusterResp.StatusCode != http.StatusOK {
+				body, _ := io.ReadAll(clusterResp.Body)
+				errorExit("%s", string(body))
+			}
+			var clusterInfo v202611.Cluster
+			if err := json.NewDecoder(clusterResp.Body).Decode(&clusterInfo); err != nil {
+				errorExit("decode cluster response: %v", err)
+			}
+			kubeletVersion := kubehubcli.ResolveClusterComponentVersion(&clusterInfo)
+			if kubeletVersion == "" {
+				errorExit("cluster API server version is unavailable")
+			}
+
 			info, err := detectHostOnNode()
 			if err != nil {
 				errorExit("detect host: %v", err)
 			}
-			plan := kubehubcli.NewReconcilePlan(info, installGvisor)
+			plan := kubehubcli.NewReconcilePlan(info, installGvisor, kubeletVersion)
 			if err := kubehubcli.ConfirmReconcilePlan(plan); err != nil {
 				errorExit("%v", err)
 			}
 
 			if err := ensureRuncOnNode(info); err != nil {
 				errorExit("ensure runc: %v", err)
+			}
+			if err := refreshCrictlOnNode(info); err != nil {
+				errorExit("refresh crictl: %v", err)
+			}
+			if err := refreshContainerdOnNode(info); err != nil {
+				errorExit("refresh containerd: %v", err)
 			}
 			if installGvisor {
 				if err := installGvisorOnHost(); err != nil {

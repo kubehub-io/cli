@@ -1,9 +1,9 @@
 package kubehubcli
 
 const (
-	ContainerdVersion     = "2.3.6"
-	RuncVersion           = "1.4.3"
-	CrictlVersion         = "v1.33.0"
+	ContainerdVersion     = "2.3.7"
+	RuncVersion           = "1.4.4"
+	CrictlVersion         = "v1.37.0"
 	ClusterDomain         = "cluster.local"
 	StaticPodPath         = "/etc/kubernetes/manifests"
 	CNIBinPath            = "/opt/cni/bin"
