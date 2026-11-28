@@ -17,6 +17,8 @@ before:
 
 builds:
   - main: ./...
+    ldflags:
+      - -X main.version={{ .Tag }}
     env:
       - CGO_ENABLED=0
       - GOMAXPROCS=2

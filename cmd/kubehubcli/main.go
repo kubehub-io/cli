@@ -7,6 +7,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var version = "dev"
+
 var verbose bool
 var autoYes bool
 var acceptAll bool
@@ -20,8 +22,9 @@ func main() {
 	}
 
 	rootCmd := &cobra.Command{
-		Use:   "kubehubcli",
-		Short: "Nest control utility for host operations",
+		Use:     "kubehubcli",
+		Short:   "Kubehub command line utility to operate clusters/nodes.",
+		Version: version,
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
 			kubehubcli.SetAutoAccept(autoYes || acceptAll)
 			cfg.Token = tokenValue
