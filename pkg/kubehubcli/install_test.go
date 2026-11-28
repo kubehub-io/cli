@@ -65,6 +65,44 @@ func TestIsRuncVersionSufficient(t *testing.T) {
 	}
 }
 
+func TestContainerdVersionNeedsUpdate(t *testing.T) {
+	tests := []struct {
+		name    string
+		version string
+		want    bool
+	}{
+		{name: "older minor", version: "containerd github.com/containerd/containerd/v2 2.2.0", want: true},
+		{name: "same version", version: "containerd github.com/containerd/containerd/v2 " + ContainerdVersion, want: false},
+		{name: "newer version", version: "containerd v2.4.0", want: false},
+		{name: "unrecognized version", version: "unknown", want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, containerdVersionNeedsUpdate(tt.version))
+		})
+	}
+}
+
+func TestCrictlVersionNeedsUpdate(t *testing.T) {
+	tests := []struct {
+		name    string
+		version string
+		want    bool
+	}{
+		{name: "older version", version: "crictl version v1.33.0", want: true},
+		{name: "same version", version: "crictl version " + CrictlVersion, want: false},
+		{name: "newer version", version: "crictl version v1.38.0", want: false},
+		{name: "unrecognized version", version: "unknown", want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, crictlVersionNeedsUpdate(tt.version))
+		})
+	}
+}
+
 func TestReloadSysctlBusyBoxFallback(t *testing.T) {
 	orig := execSysctl
 	t.Cleanup(func() { execSysctl = orig })

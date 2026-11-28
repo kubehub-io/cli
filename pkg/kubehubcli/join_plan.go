@@ -218,6 +218,44 @@ func NewReconcilePlan(info *HostInfo, installGvisor bool, targetKubeletVersion s
 	if runc.Description != "No update needed" {
 		plan.Software = append(plan.Software, runc)
 	}
+	if info == nil || info.Containerd == nil {
+		plan.Software = append(plan.Software, JoinPlanItem{
+			Summary:     "Install containerd " + ContainerdVersion,
+			Description: "Container runtime not detected on this host",
+		})
+	} else if containerdVersionNeedsUpdate(info.Containerd.Version) {
+		current := containerdVersionNumber(info.Containerd.Version)
+		if current == "" {
+			plan.Software = append(plan.Software, JoinPlanItem{
+				Summary:     "Update containerd to " + ContainerdVersion,
+				Description: "Installed version could not be determined",
+			})
+		} else {
+			plan.Software = append(plan.Software, JoinPlanItem{
+				Summary:     fmt.Sprintf("Update containerd from %s to %s", current, ContainerdVersion),
+				Description: "Installed version is older than the kubehubcli-managed version",
+			})
+		}
+	}
+	if info == nil || info.Crictl == nil {
+		plan.Software = append(plan.Software, JoinPlanItem{
+			Summary:     "Install crictl " + CrictlVersion,
+			Description: "CRI client not detected on this host",
+		})
+	} else if crictlVersionNeedsUpdate(info.Crictl.Version) {
+		current := kubernetesVersionNumber(info.Crictl.Version)
+		if current == "" {
+			plan.Software = append(plan.Software, JoinPlanItem{
+				Summary:     "Update crictl to " + CrictlVersion,
+				Description: "Installed version could not be determined",
+			})
+		} else {
+			plan.Software = append(plan.Software, JoinPlanItem{
+				Summary:     fmt.Sprintf("Update crictl from %s to %s", current, CrictlVersion),
+				Description: "Installed version is older than the kubehubcli-managed version",
+			})
+		}
+	}
 	if targetKubeletVersion != "" {
 		target := kubernetesVersionNumber(targetKubeletVersion)
 		current := ""
@@ -297,7 +335,7 @@ func runcVersionNumber(version string) string {
 }
 
 func containerdVersionNumber(version string) string {
-	re := regexp.MustCompile(`\bv(\d+\.\d+(?:\.\d+)?)`)
+	re := regexp.MustCompile(`\bv?(\d+\.\d+\.\d+)`)
 	m := re.FindStringSubmatch(version)
 	if len(m) >= 2 {
 		return m[1]

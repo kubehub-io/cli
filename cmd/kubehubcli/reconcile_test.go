@@ -141,10 +141,14 @@ func stubReconcileHost(t *testing.T) *int {
 
 	origDetect := detectHostOnNode
 	origEnsureRunc := ensureRuncOnNode
+	origRefreshContainerd := refreshContainerdOnNode
+	origRefreshCrictl := refreshCrictlOnNode
 	origRefreshConfig := refreshConfigOnNode
 	t.Cleanup(func() {
 		detectHostOnNode = origDetect
 		ensureRuncOnNode = origEnsureRunc
+		refreshContainerdOnNode = origRefreshContainerd
+		refreshCrictlOnNode = origRefreshCrictl
 		refreshConfigOnNode = origRefreshConfig
 	})
 
@@ -158,6 +162,8 @@ func stubReconcileHost(t *testing.T) *int {
 		runcCalls++
 		return nil
 	}
+	refreshContainerdOnNode = func(*kubehubcli.HostInfo) error { return nil }
+	refreshCrictlOnNode = func(*kubehubcli.HostInfo) error { return nil }
 	refreshConfigOnNode = func(context.Context, *v202611.Client, v202611.RequestEditorFn, string, string, map[string]string) error {
 		return nil
 	}

@@ -205,10 +205,12 @@ func nodeDeleteCmd(cfg *kubehubcli.Config) *cobra.Command {
 
 // Host-side seams so tests can exercise reconcile without touching the host.
 var (
-	installGvisorOnHost = kubehubcli.InstallGvisor
-	detectHostOnNode    = kubehubcli.DetectHost
-	ensureRuncOnNode    = kubehubcli.EnsureRunc
-	refreshConfigOnNode = kubehubcli.RefreshNodeConfiguration
+	installGvisorOnHost     = kubehubcli.InstallGvisor
+	detectHostOnNode        = kubehubcli.DetectHost
+	ensureRuncOnNode        = kubehubcli.EnsureRunc
+	refreshContainerdOnNode = kubehubcli.RefreshContainerd
+	refreshCrictlOnNode     = kubehubcli.RefreshCrictl
+	refreshConfigOnNode     = kubehubcli.RefreshNodeConfiguration
 )
 
 func nodeReconcileCmd(cfg *kubehubcli.Config) *cobra.Command {
@@ -280,6 +282,12 @@ func nodeReconcileCmd(cfg *kubehubcli.Config) *cobra.Command {
 
 			if err := ensureRuncOnNode(info); err != nil {
 				errorExit("ensure runc: %v", err)
+			}
+			if err := refreshCrictlOnNode(info); err != nil {
+				errorExit("refresh crictl: %v", err)
+			}
+			if err := refreshContainerdOnNode(info); err != nil {
+				errorExit("refresh containerd: %v", err)
 			}
 			if installGvisor {
 				if err := installGvisorOnHost(); err != nil {
